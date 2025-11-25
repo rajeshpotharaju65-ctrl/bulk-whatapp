@@ -1,0 +1,5 @@
+{
+  "name": "GenConnect WhatsApp Manager",
+  "description": "A comprehensive WhatsApp campaign manager powered by Gemini AI. Create targeted segments, generate personalized message templates, and manage bulk outreach via WhatsApp Web click-to-chat integration.",
+  "requestFramePermissions": []
+}
