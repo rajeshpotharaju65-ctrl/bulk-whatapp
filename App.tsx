@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Users, MessageSquare, Send, Sparkles, Plus, CheckCircle, Loader2, Phone, X, AlertTriangle, Trash2, Upload, FileText, UserPlus, Search, ImageIcon, MinusCircle, LogOut, Lock, Mail, Settings, CreditCard, Camera, RefreshCw, Download, UploadCloud, Play, StopCircle, FastForward, CheckSquare, Globe, MapPin, Link } from './components/Icons';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { LayoutDashboard, Users, MessageSquare, Send, Sparkles, Plus, CheckCircle, Loader2, Phone, X, AlertTriangle, Trash2, Upload, FileText, UserPlus, Search, ImageIcon, MinusCircle, LogOut, Lock, Mail, Settings, CreditCard, Camera, RefreshCw, Download, UploadCloud, Play, StopCircle, FastForward, CheckSquare, Globe, MapPin, Link, Calendar, Clock, Edit } from './components/Icons';
 import { DashboardChart } from './components/DashboardChart';
 import { FormInput, FormTextArea } from './components/FormInput';
 import { generateCampaignMessage, analyzeSegments } from './services/geminiService';
@@ -121,19 +121,23 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
             This will open WhatsApp Web to send the message to <span className="font-semibold text-slate-800">{pendingContact.name}</span>.
           </p>
           
-          <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 relative max-h-64 overflow-y-auto">
+          <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 relative max-h-[60vh] overflow-y-auto">
             <p className="text-sm text-slate-700 whitespace-pre-wrap font-mono">{previewMessage}</p>
             
             {campaignImage && (
                 <div className="mt-4 border-t border-slate-200 pt-3">
-                    <p className="text-xs text-slate-500 mb-2 flex items-center gap-1">
-                        <ImageIcon className="w-3 h-3" /> Image Attachment:
+                    <p className="text-xs text-slate-500 mb-2 flex items-center gap-1 font-semibold">
+                        <ImageIcon className="w-3 h-3" /> Campaign Image Attachment
                     </p>
-                    <div className="rounded-lg overflow-hidden h-32 w-full border border-slate-200 relative">
-                        <img src={campaignImage} className="w-full h-full object-cover" alt="Attachment" />
+                    <div className="rounded-lg overflow-hidden w-full border border-slate-200 bg-slate-100 relative mb-3">
+                        <img 
+                            src={campaignImage} 
+                            className="w-full h-auto max-h-64 object-contain mx-auto" 
+                            alt="Campaign Preview" 
+                        />
                     </div>
                     
-                    <div className="mt-3 bg-red-50 border border-red-100 p-3 rounded-lg">
+                    <div className="bg-red-50 border border-red-100 p-3 rounded-lg">
                         <p className="text-xs text-red-700 font-bold flex items-center gap-2 mb-2">
                              <AlertTriangle className="w-4 h-4" />
                              ACTION REQUIRED
@@ -147,7 +151,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                         </p>
                         <button 
                             onClick={handleManualCopy}
-                            className={`w-full py-1.5 rounded text-xs font-bold transition-all border ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                            className={`w-full py-2 rounded text-xs font-bold transition-all border ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                         >
                             {copySuccess ? '✓ Copied!' : 'Click here to Copy Image Manually'}
                         </button>
@@ -177,7 +181,7 @@ interface BulkSendModalProps {
   message: string;
   image: string | null;
   onClose: () => void;
-  onSendNext: () => void;
+  onSendNext: () => Promise<boolean>; // Returns true if window opened successfully
   onSkip: () => void;
   personalizeMessage: (msg: string, contact: Contact) => string;
 }
@@ -186,6 +190,40 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
     isOpen, queue, currentIndex, message, image, onClose, onSendNext, onSkip, personalizeMessage 
 }) => {
     const [copySuccess, setCopySuccess] = useState(false);
+    const [isAutoSending, setIsAutoSending] = useState(false);
+    const [countdown, setCountdown] = useState(3);
+    const [popupBlocked, setPopupBlocked] = useState(false);
+
+    // Reset auto-send when modal closes or queue finishes
+    useEffect(() => {
+        if (!isOpen || currentIndex >= queue.length) {
+            setIsAutoSending(false);
+            setPopupBlocked(false);
+            setCountdown(3);
+        }
+    }, [isOpen, currentIndex, queue.length]);
+
+    // Auto-Send Timer Logic
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout>;
+        if (isAutoSending && currentIndex < queue.length) {
+            if (countdown > 0) {
+                timer = setTimeout(() => setCountdown(prev => prev - 1), 1000);
+            } else {
+                // Time to send
+                const runAutoSend = async () => {
+                    const success = await onSendNext();
+                    if (!success) {
+                        setIsAutoSending(false);
+                        setPopupBlocked(true);
+                    }
+                    setCountdown(3); // Reset timer for next
+                };
+                runAutoSend();
+            }
+        }
+        return () => clearTimeout(timer);
+    }, [isAutoSending, countdown, currentIndex, queue.length, onSendNext]);
 
     if (!isOpen) return null;
 
@@ -209,9 +247,43 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
         }
     };
 
+    const toggleAutoSend = () => {
+        setPopupBlocked(false);
+        if (!isAutoSending) {
+            setCountdown(3);
+        }
+        setIsAutoSending(!isAutoSending);
+    };
+
     return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh] relative">
+                 
+                 {/* Popup Blocked Overlay */}
+                 {popupBlocked && (
+                     <div className="absolute inset-0 z-50 bg-white/95 flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+                         <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mb-4">
+                             <AlertTriangle className="w-10 h-10 text-red-600" />
+                         </div>
+                         <h3 className="text-2xl font-bold text-red-600 mb-2">Pop-up Blocked!</h3>
+                         <p className="text-slate-600 mb-6 max-w-xs">
+                             Your browser blocked the WhatsApp tab from opening automatically.
+                         </p>
+                         <div className="bg-slate-100 p-4 rounded-xl border border-slate-200 text-left text-sm text-slate-700 mb-6 space-y-2">
+                             <p className="font-bold">How to fix:</p>
+                             <p>1. Look for the <span className="inline-block border border-slate-300 rounded px-1 bg-white">Pop-up blocked</span> icon in your address bar.</p>
+                             <p>2. Click it and select <strong>"Always allow..."</strong></p>
+                             <p>3. Click <strong>Try Again</strong> below.</p>
+                         </div>
+                         <button 
+                             onClick={() => { setPopupBlocked(false); setIsAutoSending(false); }}
+                             className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
+                         >
+                             I've Allowed Pop-ups, Try Again
+                         </button>
+                     </div>
+                 )}
+
                  {/* Header */}
                  <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
                     <div>
@@ -246,21 +318,37 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                              </button>
                          </div>
                      ) : (
-                         <div className="w-full">
+                         <div className="w-full flex flex-col items-center">
+                             
+                             {/* Countdown Ring */}
+                             {isAutoSending && (
+                                 <div className="mb-6 relative">
+                                     <div className="w-24 h-24 rounded-full border-4 border-slate-100 flex items-center justify-center relative overflow-hidden">
+                                        <div 
+                                            className="absolute bottom-0 left-0 right-0 bg-emerald-100/50 transition-all duration-1000 ease-linear"
+                                            style={{ height: `${(countdown/3) * 100}%` }}
+                                        ></div>
+                                        <span className="text-4xl font-bold text-emerald-600 relative z-10">{countdown}</span>
+                                     </div>
+                                     <p className="text-center text-xs font-bold text-emerald-600 uppercase mt-2 tracking-wide">Sending Next...</p>
+                                 </div>
+                             )}
+
                              <div className="text-center mb-6">
-                                 <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Current Recipient ({currentIndex + 1}/{queue.length})</p>
-                                 <div className="w-20 h-20 mx-auto rounded-full bg-slate-100 mb-3 border-4 border-white shadow-lg overflow-hidden">
+                                 {!isAutoSending && <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Current Recipient ({currentIndex + 1}/{queue.length})</p>}
+                                 
+                                 <div className="w-16 h-16 mx-auto rounded-full bg-slate-100 mb-3 border-4 border-white shadow-lg overflow-hidden">
                                     {currentContact?.avatar ? (
                                         <img src={currentContact.avatar} alt={currentContact.name} className="w-full h-full object-cover" />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center text-slate-400"><Users className="w-8 h-8" /></div>
                                     )}
                                  </div>
-                                 <h2 className="text-2xl font-bold text-slate-800">{currentContact?.name}</h2>
-                                 <p className="text-slate-500 font-mono">{currentContact?.phone}</p>
+                                 <h2 className="text-xl font-bold text-slate-800">{currentContact?.name}</h2>
+                                 <p className="text-slate-500 font-mono mb-1">{currentContact?.phone}</p>
                              </div>
 
-                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 relative">
+                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 relative w-full">
                                  <p className="text-sm text-slate-600 line-clamp-3 font-mono italic">
                                      "{personalizeMessage(message, currentContact)}"
                                  </p>
@@ -271,8 +359,24 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                  )}
                              </div>
 
+                             {/* Auto Send Controls */}
+                             <div className="flex items-center justify-between mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100 w-full">
+                                <div className="flex items-center gap-2">
+                                    <div className={`w-3 h-3 rounded-full ${isAutoSending ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div>
+                                    <span className="text-sm font-semibold text-slate-700">
+                                        {isAutoSending ? `Auto-Mode Active` : 'Auto-Send Off'}
+                                    </span>
+                                </div>
+                                <button 
+                                    onClick={toggleAutoSend}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm ${isAutoSending ? 'bg-white text-red-600 border border-red-200 hover:bg-red-50' : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-200'}`}
+                                >
+                                    {isAutoSending ? 'Pause Auto-Send' : 'Start Auto-Send'}
+                                </button>
+                             </div>
+
                              {image && (
-                                 <div className="bg-red-50 border border-red-100 p-3 rounded-xl mb-6">
+                                 <div className="bg-red-50 border border-red-100 p-3 rounded-xl mb-6 w-full">
                                      <div className="flex items-start gap-2 mb-2">
                                          <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
                                          <div>
@@ -280,13 +384,9 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                              <p className="text-xs text-red-600">WhatsApp Web requires manual paste.</p>
                                          </div>
                                      </div>
-                                     <p className="text-xs text-slate-700 font-medium mb-3 pl-7">
-                                         1. Click "Send Now" (Image is copied automatically)<br/>
-                                         2. In WhatsApp, press <strong>Ctrl + V</strong> immediately.
-                                     </p>
                                      <button 
                                         onClick={handleManualCopy}
-                                        className={`w-full py-2 rounded text-xs font-bold transition-all border flex items-center justify-center gap-2 ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                                        className={`w-full py-2 rounded-lg text-xs font-bold transition-all border flex items-center justify-center gap-2 ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                                      >
                                         <ImageIcon className="w-3 h-3" />
                                         {copySuccess ? 'Image Copied Successfully!' : 'Click to Copy Image Manually'}
@@ -294,27 +394,207 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                  </div>
                              )}
 
-                             <div className="grid grid-cols-2 gap-4">
+                             <div className="grid grid-cols-2 gap-4 w-full">
                                  <button 
                                      onClick={onSkip}
-                                     className="flex items-center justify-center gap-2 px-6 py-4 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+                                     className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
                                  >
                                      <FastForward className="w-5 h-5" /> Skip
                                  </button>
                                  <button 
-                                     onClick={onSendNext}
-                                     className="flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-emerald-600 text-white font-bold text-lg hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 hover:shadow-xl hover:-translate-y-1"
+                                     onClick={() => onSendNext()}
+                                     className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition-all shadow-lg hover:-translate-y-1"
                                  >
                                      <Send className="w-5 h-5" /> Send Now
                                  </button>
                              </div>
-                             <p className="text-center text-xs text-slate-400 mt-4">
-                                 Opens WhatsApp Web. 
-                             </p>
                          </div>
                      )}
                  </div>
              </div>
+        </div>
+    );
+};
+
+interface ScheduleModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSchedule: (date: string, time: string) => void;
+}
+
+const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onSchedule }) => {
+    const [date, setDate] = useState('');
+    const [time, setTime] = useState('');
+
+    if (!isOpen) return null;
+
+    const handleSubmit = () => {
+        if (!date || !time) return;
+        onSchedule(date, time);
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full overflow-hidden border border-slate-100">
+                <div className="p-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                            <Calendar className="w-5 h-5 text-emerald-600" />
+                            Schedule Campaign
+                        </h3>
+                        <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
+                            <input 
+                                type="date" 
+                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                value={date}
+                                onChange={(e) => setDate(e.target.value)}
+                                min={new Date().toISOString().split('T')[0]}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Time</label>
+                            <input 
+                                type="time" 
+                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                value={time}
+                                onChange={(e) => setTime(e.target.value)}
+                            />
+                        </div>
+                        <div className="bg-blue-50 text-blue-800 p-3 rounded-lg text-xs flex gap-2">
+                             <Clock className="w-4 h-4 mt-0.5 shrink-0" />
+                             <p>This will save the campaign. When the time comes, you will receive a notification to start sending.</p>
+                        </div>
+                    </div>
+
+                    <div className="mt-6 flex gap-3">
+                        <button onClick={onClose} className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium">
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={handleSubmit}
+                            disabled={!date || !time}
+                            className="flex-1 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium disabled:opacity-50"
+                        >
+                            Confirm Schedule
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+interface ContactDetailsModalProps {
+  isOpen: boolean;
+  contact: Contact | null;
+  onClose: () => void;
+  onSave: (contact: Contact) => void;
+}
+
+const ContactDetailsModal: React.FC<ContactDetailsModalProps> = ({ isOpen, contact, onClose, onSave }) => {
+    const [form, setForm] = useState<Contact | null>(null);
+
+    useEffect(() => {
+        if (contact) {
+            setForm({ ...contact });
+        }
+    }, [contact]);
+
+    if (!isOpen || !form) return null;
+
+    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setForm(prev => prev ? ({ ...prev, avatar: reader.result as string }) : null);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-end animate-in fade-in duration-200">
+            <div className="h-full w-full max-w-md bg-white shadow-2xl animate-in slide-in-from-right duration-300 p-6 flex flex-col overflow-y-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold text-slate-800">Contact Details</h2>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                        <X className="w-5 h-5 text-slate-500" />
+                    </button>
+                </div>
+
+                <div className="flex flex-col items-center mb-6">
+                    <div className="relative group cursor-pointer mb-3">
+                        <div className="w-24 h-24 rounded-full bg-slate-200 overflow-hidden border-4 border-slate-50 shadow-md">
+                            {form.avatar ? (
+                                <img src={form.avatar} alt="Avatar" className="w-full h-full object-cover" />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-emerald-100 text-emerald-600 font-bold text-3xl">
+                                    {form.name.charAt(0)}
+                                </div>
+                            )}
+                        </div>
+                        <label className="absolute bottom-0 right-0 bg-white border border-slate-200 rounded-full p-2 shadow-sm cursor-pointer hover:bg-slate-50">
+                            <Camera className="w-4 h-4 text-slate-600" />
+                            <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                        </label>
+                    </div>
+                </div>
+
+                <div className="space-y-4 flex-1">
+                    <FormInput 
+                        label="Full Name"
+                        value={form.name}
+                        onChange={(e) => setForm(prev => prev ? ({...prev, name: e.target.value}) : null)}
+                    />
+                    <FormInput 
+                        label="Phone Number"
+                        value={form.phone}
+                        onChange={(e) => setForm(prev => prev ? ({...prev, phone: e.target.value}) : null)}
+                    />
+                    <FormInput 
+                        label="Company"
+                        value={form.company || ''}
+                        onChange={(e) => setForm(prev => prev ? ({...prev, company: e.target.value}) : null)}
+                    />
+                    <FormInput 
+                        label="Tags (comma separated)"
+                        value={form.tags.join(', ')}
+                        onChange={(e) => setForm(prev => prev ? ({...prev, tags: e.target.value.split(',').map(t => t.trim())}) : null)}
+                    />
+
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <p className="text-xs text-slate-500 mb-1">Last Interaction</p>
+                            <p className="font-medium text-slate-700">{form.lastInteraction}</p>
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <p className="text-xs text-slate-500 mb-1">Sentiment</p>
+                            <p className="font-medium text-slate-700 capitalize">{form.sentiment || 'Neutral'}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="mt-8 flex gap-3">
+                    <button onClick={onClose} className="flex-1 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={() => onSave(form)}
+                        className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200"
+                    >
+                        Save Changes
+                    </button>
+                </div>
+            </div>
         </div>
     );
 };
@@ -328,13 +608,13 @@ interface AddContactModalProps {
 
 const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAddSingle, onAddBulk }) => {
   const [addContactMode, setAddContactMode] = useState<'single' | 'bulk'>('single');
-  const [newContactForm, setNewContactForm] = useState({ name: '', phone: '', tags: '', avatar: '' });
+  const [newContactForm, setNewContactForm] = useState({ name: '', phone: '', company: '', tags: '', avatar: '' });
   const [bulkContactText, setBulkContactText] = useState('');
 
   // Reset form when modal opens
   useEffect(() => {
     if (isOpen) {
-        setNewContactForm({ name: '', phone: '', tags: '', avatar: '' });
+        setNewContactForm({ name: '', phone: '', company: '', tags: '', avatar: '' });
         setBulkContactText('');
         setAddContactMode('single');
     }
@@ -423,6 +703,12 @@ const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAd
                   type="tel"
                   value={newContactForm.phone}
                   onChange={(e) => setNewContactForm(prev => ({...prev, phone: e.target.value}))}
+                />
+                <FormInput 
+                  label="Company Name"
+                  placeholder="e.g. Acme Corp"
+                  value={newContactForm.company}
+                  onChange={(e) => setNewContactForm(prev => ({...prev, company: e.target.value}))}
                 />
                  <FormInput 
                   label="Tags (comma separated)"
@@ -706,6 +992,20 @@ const App: React.FC = () => {
     }
   });
 
+  // Initialize scheduled campaigns
+  const [scheduledCampaigns, setScheduledCampaigns] = useState<Campaign[]>(() => {
+      try {
+          const saved = localStorage.getItem('desichai_scheduled');
+          return saved ? JSON.parse(saved) : [];
+      } catch (e) {
+          return [];
+      }
+  });
+
+  useEffect(() => {
+      localStorage.setItem('desichai_scheduled', JSON.stringify(scheduledCampaigns));
+  }, [scheduledCampaigns]);
+
   // Dashboard stats
   const [dashboardStats, setDashboardStats] = useState({
       total: contacts.length,
@@ -740,10 +1040,13 @@ const App: React.FC = () => {
   // Modal Visibility State
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showAddContact, setShowAddContact] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [pendingContact, setPendingContact] = useState<Contact | null>(null);
 
   // Contacts View State
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterTag, setFilterTag] = useState<string>('All');
 
   // Notification State
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
@@ -756,13 +1059,45 @@ const App: React.FC = () => {
     setTimeout(() => setNotification(null), 3000);
   };
 
+  // Timer Check for Scheduled Campaigns
+  useEffect(() => {
+      const interval = setInterval(() => {
+          const now = new Date();
+          const due = scheduledCampaigns.filter(c => 
+              c.status === 'scheduled' && 
+              c.scheduledFor && 
+              new Date(c.scheduledFor) <= now
+          );
+
+          if (due.length > 0) {
+              // Only notify if we haven't already marked them as ready/notified to prevent spamming
+              // In this simple app, we just check if they are 'scheduled'. 
+              // We'll trust the user to act on the visual cue, but a toast helps.
+              showNotification(`📅 You have ${due.length} scheduled campaign(s) ready to launch!`, 'success');
+          }
+      }, 60000); // Check every minute
+
+      return () => clearInterval(interval);
+  }, [scheduledCampaigns]);
+
   // Helper: Personalize Message with Dynamic Placeholders
   const personalizeMessage = (template: string, contact: Contact) => {
     const firstName = contact.name.split(' ')[0] || 'Friend';
-    return template
+    let msg = template
       .replace(/{firstName}/g, firstName)
       .replace(/{name}/g, contact.name || 'Valued Customer')
       .replace(/{phone}/g, contact.phone);
+
+    // Dynamic custom placeholders logic
+    if (contact.company) {
+        msg = msg.replace(/{company}/g, contact.company);
+        msg = msg.replace(/{companyName}/g, contact.company);
+    } else {
+        // Fallback if company is missing but placeholder exists
+        msg = msg.replace(/{company}/g, 'your company').replace(/{companyName}/g, 'your company');
+    }
+    
+    return msg;
   };
 
   // Handlers
@@ -786,6 +1121,54 @@ const App: React.FC = () => {
     setShowConfirmation(true);
   };
 
+  const handleScheduleCampaign = (date: string, time: string) => {
+      const scheduledDateTime = new Date(`${date}T${time}`).toISOString();
+      
+      const newCampaign: Campaign = {
+          id: generateId(),
+          name: campaignGoal || 'Untitled Campaign',
+          status: 'scheduled',
+          messageTemplate: generatedMessage,
+          targetSegment: campaignAudience,
+          sentCount: 0,
+          totalCount: selectedContactIds.length,
+          scheduledFor: scheduledDateTime,
+          recipientIds: selectedContactIds,
+          image: campaignImage
+      };
+
+      setScheduledCampaigns(prev => [...prev, newCampaign]);
+      showNotification("Campaign scheduled successfully!");
+      // Reset form
+      setCampaignGoal('');
+      setGeneratedMessage('');
+      setSelectedContactIds([]);
+  };
+
+  const handleLaunchScheduled = (campaign: Campaign) => {
+      if (!campaign.recipientIds || campaign.recipientIds.length === 0) return;
+      
+      setGeneratedMessage(campaign.messageTemplate);
+      setCampaignImage(campaign.image || null);
+      setSelectedContactIds(campaign.recipientIds);
+      setCampaignAudience(campaign.targetSegment);
+      setCampaignGoal(campaign.name);
+      
+      // Update status to active/completed later, for now we just load it
+      // Maybe remove it from scheduled list or mark as processed?
+      // Let's mark it as completed in the scheduled list so it moves/disappears or user manually deletes
+      // For now, let's just load it into the builder so user can click "Start Bulk"
+      
+      showNotification("Campaign loaded. Click 'Start Bulk Campaign' to begin.");
+      // Scroll to top or switch view if needed
+      setCurrentView('campaigns');
+  };
+
+  const deleteScheduledCampaign = (id: string) => {
+      setScheduledCampaigns(prev => prev.filter(c => c.id !== id));
+      showNotification("Scheduled campaign removed.");
+  };
+
   // BULK SEND LOGIC
   const startBulkCampaign = () => {
       if (!generatedMessage) {
@@ -797,9 +1180,6 @@ const App: React.FC = () => {
       if (selectedContactIds.length > 0) {
           queue = contacts.filter(c => selectedContactIds.includes(c.id));
       } else {
-          // If none selected, theoretically could send to all, but safer to require selection
-          // Or we can just use all visible contacts if filtered?
-          // For now, let's use all contacts if nothing is selected
            queue = contacts;
       }
 
@@ -813,11 +1193,11 @@ const App: React.FC = () => {
       setIsBulkSending(true);
   };
 
-  const handleBulkSendNext = async () => {
+  const handleBulkSendNext = async (): Promise<boolean> => {
       const contact = bulkQueue[bulkCurrentIndex];
-      if (!contact) return;
+      if (!contact) return false;
 
-       // Copy Image
+       // Copy Image FIRST (Async operation needs focus, do before window.open)
        if (campaignImage) {
         try {
             const blob = await convertImageToPngBlob(campaignImage);
@@ -826,8 +1206,11 @@ const App: React.FC = () => {
             ]);
             showNotification("Image Copied! Paste (Ctrl+V) in WhatsApp", "success");
         } catch (err) {
-            console.error("Auto-copy failed", err);
-            showNotification("Image Auto-copy failed. Use Manual Copy button.", "error");
+             console.error("Auto-copy failed", err);
+             // Don't block sending if copy fails (common in auto-send mode without user gesture)
+             if (!isBulkSending) { // Warn if manual
+                 showNotification("Could not auto-copy. Please use manual button.", "error");
+             }
         }
     }
 
@@ -836,11 +1219,16 @@ const App: React.FC = () => {
     const url = `https://wa.me/${contact.phone}?text=${encodedMessage}`;
     
     // Open WA
-    window.open(url, '_blank');
+    const newWindow = window.open(url, '_blank');
     
-    // Advance Queue
-    setBulkCurrentIndex(prev => prev + 1);
-    setDashboardStats(prev => ({...prev, sent: prev.sent + 1}));
+    if (newWindow) {
+        // Advance Queue
+        setBulkCurrentIndex(prev => prev + 1);
+        setDashboardStats(prev => ({...prev, sent: prev.sent + 1}));
+        return true;
+    } else {
+        return false; // Popup blocked
+    }
   };
 
   const handleBulkSkip = () => {
@@ -850,7 +1238,7 @@ const App: React.FC = () => {
   const confirmSend = async () => {
     if (!pendingContact || !generatedMessage) return;
 
-    // Try to copy image to clipboard if exists
+    // Try to copy image to clipboard if exists FIRST
     if (campaignImage) {
         try {
             const blob = await convertImageToPngBlob(campaignImage);
@@ -870,12 +1258,12 @@ const App: React.FC = () => {
     const encodedMessage = encodeURIComponent(personalizedMsg);
     const url = `https://wa.me/${pendingContact.phone}?text=${encodedMessage}`;
     
-    // Small delay to allow clipboard action to finish/toast to show
+    // Open window AFTER clipboard op
     setTimeout(() => {
         window.open(url, '_blank');
         // Increment sent count manually for effect
         setDashboardStats(prev => ({...prev, sent: prev.sent + 1}));
-    }, 500);
+    }, 100);
     
     setShowConfirmation(false);
     setPendingContact(null);
@@ -897,14 +1285,14 @@ const App: React.FC = () => {
         }
     }
 
-    const mockContact = { name: 'Test User', phone: TEST_NUMBER } as Contact;
+    const mockContact = { name: 'Test User', phone: TEST_NUMBER, company: 'Test Company' } as Contact;
     const personalizedMsg = personalizeMessage(generatedMessage, mockContact);
     const encodedMessage = encodeURIComponent(personalizedMsg);
     const url = `https://wa.me/${TEST_NUMBER}?text=${encodedMessage}`;
     
     setTimeout(() => {
         window.open(url, '_blank');
-    }, 500);
+    }, 100);
   };
 
   const handleCampaignImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -923,6 +1311,7 @@ const App: React.FC = () => {
           id: generateId(),
           name: data.name || 'Unknown',
           phone: data.phone || '',
+          company: data.company || '',
           tags: data.tags || [],
           lastInteraction: new Date().toISOString().split('T')[0],
           sentiment: 'neutral',
@@ -931,6 +1320,12 @@ const App: React.FC = () => {
       setContacts(prev => [newContact, ...prev]);
       setShowAddContact(false);
       showNotification("Contact added successfully!");
+  };
+
+  const handleUpdateContact = (updatedContact: Contact) => {
+      setContacts(prev => prev.map(c => c.id === updatedContact.id ? updatedContact : c));
+      setEditingContact(null);
+      showNotification("Contact updated successfully!");
   };
 
   const handleBulkAdd = (text: string) => {
@@ -1055,6 +1450,7 @@ const App: React.FC = () => {
       const backupData = {
           contacts: contacts,
           userProfile: userProfile,
+          scheduled: scheduledCampaigns,
           timestamp: new Date().toISOString(),
           version: '1.0'
       };
@@ -1084,6 +1480,9 @@ const App: React.FC = () => {
               }
               if (data.userProfile) {
                   setUserProfile(data.userProfile);
+              }
+              if (data.scheduled) {
+                  setScheduledCampaigns(data.scheduled);
               }
               
               showNotification("Data restored successfully!", "success");
@@ -1147,10 +1546,11 @@ const App: React.FC = () => {
   };
 
   // Filter contacts for display
-  const filteredContacts = contacts.filter(c => 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      c.phone.includes(searchTerm)
-  );
+  const filteredContacts = contacts.filter(c => {
+      const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone.includes(searchTerm);
+      const matchesTag = filterTag === 'All' || c.tags.includes(filterTag);
+      return matchesSearch && matchesTag;
+  });
 
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -1228,7 +1628,7 @@ const App: React.FC = () => {
 
   const renderCampaigns = () => (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300 h-full">
-      <div className="lg:col-span-1 space-y-6">
+      <div className="lg:col-span-1 space-y-6 flex flex-col h-full overflow-hidden">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
           <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-emerald-500" />
@@ -1282,17 +1682,41 @@ const App: React.FC = () => {
             </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Quick Actions</h3>
-            <div className="grid grid-cols-1 gap-3">
-                 <button 
-                    onClick={sendTestToMe}
-                    disabled={!generatedMessage}
-                    className="flex items-center justify-center gap-2 w-full py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:border-emerald-300 hover:text-emerald-700 transition-colors disabled:opacity-50 text-sm font-medium"
-                 >
-                    <Send className="w-4 h-4" /> Send Test to {TEST_NUMBER}
-                 </button>
-            </div>
+        {/* Scheduled Campaigns List */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex-1 overflow-y-auto min-h-[200px]">
+            <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-amber-500" />
+                Scheduled ({scheduledCampaigns.length})
+            </h3>
+            {scheduledCampaigns.length === 0 ? (
+                <p className="text-sm text-slate-400 italic text-center py-4">No pending campaigns.</p>
+            ) : (
+                <div className="space-y-3">
+                    {scheduledCampaigns.map(c => {
+                        const isDue = c.scheduledFor ? new Date(c.scheduledFor) <= new Date() : false;
+                        const dateObj = c.scheduledFor ? new Date(c.scheduledFor) : null;
+                        
+                        return (
+                            <div key={c.id} className={`p-3 rounded-lg border text-left transition-all ${isDue ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+                                <div className="flex justify-between items-start mb-1">
+                                    <h4 className="font-semibold text-slate-800 text-sm truncate w-32" title={c.name}>{c.name}</h4>
+                                    <button onClick={() => deleteScheduledCampaign(c.id)} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                                </div>
+                                <p className="text-xs text-slate-500 flex items-center gap-1 mb-2">
+                                    <Calendar className="w-3 h-3" />
+                                    {dateObj?.toLocaleDateString()} {dateObj?.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </p>
+                                <button 
+                                    onClick={() => handleLaunchScheduled(c)}
+                                    className={`w-full py-1.5 rounded text-xs font-bold ${isDue ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-500'}`}
+                                >
+                                    {isDue ? 'Launch Now' : 'Load & Edit'}
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
         </div>
       </div>
 
@@ -1317,10 +1741,11 @@ const App: React.FC = () => {
           <div className="mb-4">
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-2">
                 <p className="text-xs text-slate-500 mb-1">Dynamic Placeholders available:</p>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                     <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{firstName}`}</span>
                     <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{name}`}</span>
                     <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{phone}`}</span>
+                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{company}`}</span>
                 </div>
             </div>
             <textarea
@@ -1372,7 +1797,10 @@ const App: React.FC = () => {
                                     </div>
                                     <div>
                                         <p className="text-sm font-medium text-slate-800">{contact.name}</p>
-                                        <p className="text-xs text-slate-500">{contact.phone}</p>
+                                        <div className="flex items-center gap-2">
+                                            <p className="text-xs text-slate-500">{contact.phone}</p>
+                                            {contact.company && <span className="text-[10px] bg-slate-100 px-1.5 rounded text-slate-500">{contact.company}</span>}
+                                        </div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -1396,54 +1824,86 @@ const App: React.FC = () => {
               )}
             </div>
             
-            <div className="mt-4 pt-4 border-t border-slate-100">
+            <div className="mt-4 pt-4 border-t border-slate-100 flex gap-3">
+                 <button 
+                    onClick={() => setShowScheduleModal(true)}
+                    disabled={selectedContactIds.length < 1 || !generatedMessage}
+                    className="flex-1 py-3 bg-white border border-slate-300 text-slate-700 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                     <Calendar className="w-4 h-4 text-slate-600" />
+                     Schedule for Later
+                 </button>
                  <button 
                     onClick={startBulkCampaign}
-                    disabled={selectedContactIds.length < 2 || !generatedMessage}
-                    className="w-full py-3 bg-slate-900 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={selectedContactIds.length < 1 || !generatedMessage}
+                    className="flex-[2] py-3 bg-slate-900 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                  >
                      <Play className="w-4 h-4 text-emerald-400" />
-                     Start Bulk Campaign ({selectedContactIds.length > 0 ? selectedContactIds.length : 'All'} recipients)
+                     Start Bulk Campaign ({selectedContactIds.length > 0 ? selectedContactIds.length : 'All'})
                  </button>
-                 <p className="text-center text-xs text-slate-400 mt-2">
-                     Will queue messages and send one by one.
-                 </p>
             </div>
+            <p className="text-center text-xs text-slate-400 mt-2">
+                     Will queue messages and send one by one.
+             </p>
           </div>
         </div>
       </div>
     </div>
   );
 
-  const renderContacts = () => (
+  const renderContacts = () => {
+    // Extract all unique tags
+    const allTags = ['All', ...Array.from(new Set(contacts.flatMap(c => c.tags))).sort()];
+
+    return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-300 flex flex-col h-full">
-      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-        <h3 className="text-lg font-bold text-slate-800">Contact Management</h3>
-        <div className="flex gap-3">
-          <div className="relative">
-             <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-             <input 
-                type="text" 
-                placeholder="Search contacts..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-64"
-             />
-          </div>
-          {selectedContactIds.length > 0 && (
-              <button 
-                onClick={handleBulkDelete}
-                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors border border-red-200"
-              >
-                  <Trash2 className="w-4 h-4" /> Delete ({selectedContactIds.length})
-              </button>
-          )}
-          <button 
-            onClick={() => setShowAddContact(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Add Contact
-          </button>
+      <div className="p-6 border-b border-slate-100 flex flex-col gap-4 bg-slate-50/50">
+        <div className="flex justify-between items-center">
+            <h3 className="text-lg font-bold text-slate-800">Contact Management</h3>
+            <div className="flex gap-3">
+            <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                <input 
+                    type="text" 
+                    placeholder="Search contacts..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-64"
+                />
+            </div>
+            {selectedContactIds.length > 0 && (
+                <button 
+                    onClick={handleBulkDelete}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors border border-red-200"
+                >
+                    <Trash2 className="w-4 h-4" /> Delete ({selectedContactIds.length})
+                </button>
+            )}
+            <button 
+                onClick={() => setShowAddContact(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
+            >
+                <Plus className="w-4 h-4" /> Add Contact
+            </button>
+            </div>
+        </div>
+        
+        {/* Tag Filters */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            <span className="text-xs font-semibold text-slate-500 uppercase mr-2">Filters:</span>
+            {allTags.map(tag => (
+                <button
+                    key={tag}
+                    onClick={() => setFilterTag(tag)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors border ${
+                        filterTag === tag 
+                        ? 'bg-slate-800 text-white border-slate-800' 
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                >
+                    {tag}
+                </button>
+            ))}
         </div>
       </div>
       
@@ -1461,6 +1921,7 @@ const App: React.FC = () => {
               </th>
               <th className="p-4">Name</th>
               <th className="p-4">Phone</th>
+              <th className="p-4">Company</th>
               <th className="p-4">Tags</th>
               <th className="p-4">Last Interaction</th>
               <th className="p-4 text-right">Actions</th>
@@ -1469,8 +1930,8 @@ const App: React.FC = () => {
           <tbody className="divide-y divide-slate-100">
             {filteredContacts.length > 0 ? (
                 filteredContacts.map((contact) => (
-                <tr key={contact.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="p-4">
+                <tr key={contact.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => setEditingContact(contact)}>
+                    <td className="p-4" onClick={(e) => e.stopPropagation()}>
                          <button 
                             onClick={() => toggleSelectContact(contact.id)}
                             className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedContactIds.includes(contact.id) ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}
@@ -1491,6 +1952,13 @@ const App: React.FC = () => {
                     </div>
                     </td>
                     <td className="p-4 text-slate-600 font-mono text-sm">{contact.phone}</td>
+                    <td className="p-4 text-slate-600 text-sm">
+                        {contact.company ? (
+                            <span className="font-medium">{contact.company}</span>
+                        ) : (
+                            <span className="text-slate-400 italic">--</span>
+                        )}
+                    </td>
                     <td className="p-4">
                     <div className="flex gap-2 flex-wrap">
                         {contact.tags.map((tag, i) => (
@@ -1501,7 +1969,7 @@ const App: React.FC = () => {
                     </div>
                     </td>
                     <td className="p-4 text-slate-500 text-sm">{contact.lastInteraction}</td>
-                    <td className="p-4 text-right">
+                    <td className="p-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <button 
                             onClick={() => deleteContact(contact.id)}
                             className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
@@ -1514,7 +1982,7 @@ const App: React.FC = () => {
                 ))
             ) : (
                 <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400">
+                    <td colSpan={7} className="p-8 text-center text-slate-400">
                         No contacts found. Add some to get started.
                     </td>
                 </tr>
@@ -1524,6 +1992,7 @@ const App: React.FC = () => {
       </div>
     </div>
   );
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
@@ -1591,6 +2060,13 @@ const App: React.FC = () => {
         onAddBulk={handleBulkAdd}
       />
       
+      <ContactDetailsModal 
+        isOpen={!!editingContact}
+        contact={editingContact}
+        onClose={() => setEditingContact(null)}
+        onSave={handleUpdateContact}
+      />
+
       <ConfirmationModal 
         isOpen={showConfirmation} 
         onClose={() => setShowConfirmation(false)} 
@@ -1611,6 +2087,12 @@ const App: React.FC = () => {
          onSendNext={handleBulkSendNext}
          onSkip={handleBulkSkip}
          personalizeMessage={personalizeMessage}
+      />
+
+      <ScheduleModal 
+        isOpen={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+        onSchedule={handleScheduleCampaign}
       />
     </div>
   );
