@@ -31,6 +31,10 @@ export interface UserProfile {
   avatar: string;
   company: string;
   plan: 'Free' | 'Pro' | 'Enterprise';
+  // Business Details for CTAs
+  businessPhone?: string;
+  website?: string;
+  locationUrl?: string;
 }
 
 export type ViewState = 'dashboard' | 'campaigns' | 'contacts';

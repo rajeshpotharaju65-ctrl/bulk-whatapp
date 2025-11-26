@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, MessageSquare, Send, Sparkles, Plus, CheckCircle, Loader2, Phone, X, AlertTriangle, Trash2, Upload, FileText, UserPlus, Search, ImageIcon, MinusCircle, LogOut, Lock, Mail, Settings, CreditCard, Camera, RefreshCw, Download, UploadCloud, Play, StopCircle, FastForward, CheckSquare } from './components/Icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { LayoutDashboard, Users, MessageSquare, Send, Sparkles, Plus, CheckCircle, Loader2, Phone, X, AlertTriangle, Trash2, Upload, FileText, UserPlus, Search, ImageIcon, MinusCircle, LogOut, Lock, Mail, Settings, CreditCard, Camera, RefreshCw, Download, UploadCloud, Play, StopCircle, FastForward, CheckSquare, Globe, MapPin, Link } from './components/Icons';
 import { DashboardChart } from './components/DashboardChart';
 import { FormInput, FormTextArea } from './components/FormInput';
 import { generateCampaignMessage, analyzeSegments } from './services/geminiService';
@@ -22,7 +22,10 @@ const DEFAULT_PROFILE: UserProfile = {
     email: 'admin@desichai.com',
     avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
     company: 'DesiChai',
-    plan: 'Pro'
+    plan: 'Pro',
+    businessPhone: '+1234567890',
+    website: 'www.desichai.com',
+    locationUrl: ''
 };
 
 // Zeroed out chart data for fresh start
@@ -35,6 +38,32 @@ const MOCK_CHART_DATA: ChartData[] = [
   { name: 'Sat', sent: 0, replies: 0 },
   { name: 'Sun', sent: 0, replies: 0 },
 ];
+
+// Helper: Convert any image data URI to a PNG Blob for Clipboard compatibility
+// Browsers typically only support 'image/png' for clipboard.write
+const convertImageToPngBlob = (dataUrl: string): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                reject(new Error("Canvas context failed"));
+                return;
+            }
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(blob => {
+                if (blob) resolve(blob);
+                else reject(new Error("Blob conversion failed"));
+            }, 'image/png');
+        };
+        img.onerror = (err) => reject(err);
+        img.src = dataUrl;
+    });
+};
 
 // --- MODALS (Extracted to prevent re-render lag) ---
 
@@ -51,9 +80,27 @@ interface ConfirmationModalProps {
 const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ 
   isOpen, onClose, onConfirm, pendingContact, generatedMessage, campaignImage, personalizeMessage 
 }) => {
+  const [copySuccess, setCopySuccess] = useState(false);
+
   if (!isOpen || !pendingContact) return null;
   
   const previewMessage = personalizeMessage(generatedMessage, pendingContact);
+
+  const handleManualCopy = async () => {
+    if (campaignImage) {
+        try {
+            const blob = await convertImageToPngBlob(campaignImage);
+            await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': blob })
+            ]);
+            setCopySuccess(true);
+            setTimeout(() => setCopySuccess(false), 2000);
+        } catch (err) {
+            console.error("Manual copy failed", err);
+            alert("Failed to copy image. Browser might not support this format.");
+        }
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -82,12 +129,29 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                     <p className="text-xs text-slate-500 mb-2 flex items-center gap-1">
                         <ImageIcon className="w-3 h-3" /> Image Attachment:
                     </p>
-                    <div className="rounded-lg overflow-hidden h-32 w-full border border-slate-200">
+                    <div className="rounded-lg overflow-hidden h-32 w-full border border-slate-200 relative">
                         <img src={campaignImage} className="w-full h-full object-cover" alt="Attachment" />
                     </div>
-                    <p className="text-xs text-emerald-600 mt-2 bg-emerald-50 p-2 rounded">
-                        <strong>Auto-Copy Enabled:</strong> Image will be copied to your clipboard. Just press <strong>Ctrl+V</strong> (Paste) in WhatsApp.
-                    </p>
+                    
+                    <div className="mt-3 bg-red-50 border border-red-100 p-3 rounded-lg">
+                        <p className="text-xs text-red-700 font-bold flex items-center gap-2 mb-2">
+                             <AlertTriangle className="w-4 h-4" />
+                             ACTION REQUIRED
+                        </p>
+                        <p className="text-xs text-red-600 mb-2">
+                             WhatsApp Web does not support automatic image attaching.
+                        </p>
+                        <p className="text-xs text-slate-700 mb-3 font-medium">
+                            Step 1: The image will be copied to your clipboard automatically. <br/>
+                            Step 2: Press <span className="bg-slate-200 px-1 rounded font-mono">Ctrl+V</span> (Paste) when WhatsApp opens.
+                        </p>
+                        <button 
+                            onClick={handleManualCopy}
+                            className={`w-full py-1.5 rounded text-xs font-bold transition-all border ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                        >
+                            {copySuccess ? '✓ Copied!' : 'Click here to Copy Image Manually'}
+                        </button>
+                    </div>
                 </div>
             )}
           </div>
@@ -121,11 +185,29 @@ interface BulkSendModalProps {
 const BulkSendModal: React.FC<BulkSendModalProps> = ({ 
     isOpen, queue, currentIndex, message, image, onClose, onSendNext, onSkip, personalizeMessage 
 }) => {
+    const [copySuccess, setCopySuccess] = useState(false);
+
     if (!isOpen) return null;
 
     const currentContact = queue[currentIndex];
     const isComplete = currentIndex >= queue.length;
     const progress = Math.min(((currentIndex) / queue.length) * 100, 100);
+
+    const handleManualCopy = async () => {
+        if (image) {
+            try {
+                const blob = await convertImageToPngBlob(image);
+                await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]);
+                setCopySuccess(true);
+                setTimeout(() => setCopySuccess(false), 2000);
+            } catch (err) {
+                console.error("Manual copy failed", err);
+                alert("Failed to copy image. Browser restriction.");
+            }
+        }
+    };
 
     return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -151,7 +233,7 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                  </div>
 
                  {/* Content */}
-                 <div className="p-8 flex-1 flex flex-col items-center justify-center">
+                 <div className="p-8 flex-1 flex flex-col items-center justify-center overflow-y-auto">
                      {isComplete ? (
                          <div className="text-center py-8">
                              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6 text-emerald-600">
@@ -178,7 +260,7 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                  <p className="text-slate-500 font-mono">{currentContact?.phone}</p>
                              </div>
 
-                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-8 relative">
+                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 relative">
                                  <p className="text-sm text-slate-600 line-clamp-3 font-mono italic">
                                      "{personalizeMessage(message, currentContact)}"
                                  </p>
@@ -188,6 +270,29 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                      </div>
                                  )}
                              </div>
+
+                             {image && (
+                                 <div className="bg-red-50 border border-red-100 p-3 rounded-xl mb-6">
+                                     <div className="flex items-start gap-2 mb-2">
+                                         <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+                                         <div>
+                                             <p className="text-sm font-bold text-red-700">Image Attached</p>
+                                             <p className="text-xs text-red-600">WhatsApp Web requires manual paste.</p>
+                                         </div>
+                                     </div>
+                                     <p className="text-xs text-slate-700 font-medium mb-3 pl-7">
+                                         1. Click "Send Now" (Image is copied automatically)<br/>
+                                         2. In WhatsApp, press <strong>Ctrl + V</strong> immediately.
+                                     </p>
+                                     <button 
+                                        onClick={handleManualCopy}
+                                        className={`w-full py-2 rounded text-xs font-bold transition-all border flex items-center justify-center gap-2 ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                                     >
+                                        <ImageIcon className="w-3 h-3" />
+                                        {copySuccess ? 'Image Copied Successfully!' : 'Click to Copy Image Manually'}
+                                     </button>
+                                 </div>
+                             )}
 
                              <div className="grid grid-cols-2 gap-4">
                                  <button 
@@ -204,7 +309,7 @@ const BulkSendModal: React.FC<BulkSendModalProps> = ({
                                  </button>
                              </div>
                              <p className="text-center text-xs text-slate-400 mt-4">
-                                 Opens WhatsApp Web. {image ? 'Image will be auto-copied.' : ''}
+                                 Opens WhatsApp Web. 
                              </p>
                          </div>
                      )}
@@ -446,9 +551,10 @@ interface ProfileModalProps {
   onUpdateAvatar: (url: string) => void;
   onExportData: () => void;
   onImportData: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onUpdateUser: (updated: Partial<UserProfile>) => void;
 }
 
-const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onLogout, onUpdateAvatar, onExportData, onImportData }) => {
+const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onLogout, onUpdateAvatar, onExportData, onImportData, onUpdateUser }) => {
   if (!isOpen) return null;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -499,6 +605,29 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onLo
                </span>
             </div>
             
+            <div className="space-y-4 mb-8">
+                <h4 className="text-sm font-semibold text-slate-800 uppercase tracking-wide border-b border-slate-100 pb-2">Business Details for Buttons</h4>
+                
+                <FormInput 
+                    label="Business Phone (for 'Call Us')"
+                    value={user.businessPhone || ''}
+                    onChange={(e) => onUpdateUser({ businessPhone: e.target.value })}
+                    placeholder="+1234567890"
+                />
+                <FormInput 
+                    label="Website URL (for 'Visit Us')"
+                    value={user.website || ''}
+                    onChange={(e) => onUpdateUser({ website: e.target.value })}
+                    placeholder="https://www.example.com"
+                />
+                <FormInput 
+                    label="Map/Location URL (for 'Location')"
+                    value={user.locationUrl || ''}
+                    onChange={(e) => onUpdateUser({ locationUrl: e.target.value })}
+                    placeholder="https://maps.google.com/..."
+                />
+            </div>
+
             <div className="space-y-2 mb-6">
                 <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-slate-50 transition-colors text-left border border-transparent hover:border-slate-200 group">
                     <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
@@ -507,15 +636,6 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onLo
                     <div>
                         <h4 className="font-medium text-slate-800">Account Settings</h4>
                         <p className="text-xs text-slate-500">Manage your preferences</p>
-                    </div>
-                </button>
-                <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-slate-50 transition-colors text-left border border-transparent hover:border-slate-200 group">
-                    <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center group-hover:bg-purple-100 transition-colors">
-                        <CreditCard className="w-5 h-5" />
-                    </div>
-                    <div>
-                        <h4 className="font-medium text-slate-800">Billing & Subscription</h4>
-                        <p className="text-xs text-slate-500">Manage your Pro plan</p>
                     </div>
                 </button>
             </div>
@@ -636,18 +756,6 @@ const App: React.FC = () => {
     setTimeout(() => setNotification(null), 3000);
   };
 
-  // Helper: Convert Base64 string to Blob
-  const dataURItoBlob = (dataURI: string) => {
-    const byteString = atob(dataURI.split(',')[1]);
-    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
-    const ab = new ArrayBuffer(byteString.length);
-    const ia = new Uint8Array(ab);
-    for (let i = 0; i < byteString.length; i++) {
-      ia[i] = byteString.charCodeAt(i);
-    }
-    return new Blob([ab], {type: mimeString});
-  };
-
   // Helper: Personalize Message with Dynamic Placeholders
   const personalizeMessage = (template: string, contact: Contact) => {
     const firstName = contact.name.split(' ')[0] || 'Friend';
@@ -712,14 +820,14 @@ const App: React.FC = () => {
        // Copy Image
        if (campaignImage) {
         try {
-            const blob = dataURItoBlob(campaignImage);
+            const blob = await convertImageToPngBlob(campaignImage);
             await navigator.clipboard.write([
-                new ClipboardItem({
-                    [blob.type]: blob
-                })
+                new ClipboardItem({ 'image/png': blob })
             ]);
+            showNotification("Image Copied! Paste (Ctrl+V) in WhatsApp", "success");
         } catch (err) {
             console.error("Auto-copy failed", err);
+            showNotification("Image Auto-copy failed. Use Manual Copy button.", "error");
         }
     }
 
@@ -745,13 +853,9 @@ const App: React.FC = () => {
     // Try to copy image to clipboard if exists
     if (campaignImage) {
         try {
-            const blob = dataURItoBlob(campaignImage);
-            // Writing to clipboard requires user activation (which this button click provides)
-            // Note: This works in secure contexts (HTTPS) and localhost.
+            const blob = await convertImageToPngBlob(campaignImage);
             await navigator.clipboard.write([
-                new ClipboardItem({
-                    [blob.type]: blob
-                })
+                new ClipboardItem({ 'image/png': blob })
             ]);
             showNotification("Image copied! Paste (Ctrl+V) in WhatsApp", 'success');
         } catch (err) {
@@ -782,14 +886,13 @@ const App: React.FC = () => {
 
     if (campaignImage) {
         try {
-            const blob = dataURItoBlob(campaignImage);
+            const blob = await convertImageToPngBlob(campaignImage);
             await navigator.clipboard.write([
-                new ClipboardItem({
-                    [blob.type]: blob
-                })
+                new ClipboardItem({ 'image/png': blob })
             ]);
             showNotification("Image copied! Paste (Ctrl+V) in WhatsApp", 'success');
         } catch (err) {
+            console.error(err);
             showNotification("Could not auto-copy image. Please attach manually.", 'error');
         }
     }
@@ -926,6 +1029,10 @@ const App: React.FC = () => {
       setUserProfile(prev => ({...prev, avatar: newAvatar}));
       showNotification("Profile photo updated successfully!");
   };
+
+  const handleUpdateUser = (updated: Partial<UserProfile>) => {
+      setUserProfile(prev => ({ ...prev, ...updated }));
+  };
   
   const refreshDashboard = () => {
       const randomSent = Math.floor(Math.random() * 500) + 1000;
@@ -990,431 +1097,500 @@ const App: React.FC = () => {
       // Reset input value to allow re-uploading same file if needed
       e.target.value = '';
   };
+  
+  // Append CTA Text Logic
+  const appendCTA = (type: 'call' | 'website' | 'location') => {
+      let textToAppend = '';
+      if (type === 'call') {
+          if (!userProfile.businessPhone) {
+              showNotification("Please set Business Phone in Profile first.", "error");
+              setShowProfile(true);
+              return;
+          }
+          textToAppend = `\n\n📞 Call Us: ${userProfile.businessPhone}`;
+      } else if (type === 'website') {
+          if (!userProfile.website) {
+              showNotification("Please set Website in Profile first.", "error");
+              setShowProfile(true);
+              return;
+          }
+           textToAppend = `\n\n🌐 Visit Our Website: ${userProfile.website}`;
+      } else if (type === 'location') {
+           if (!userProfile.locationUrl) {
+              showNotification("Please set Location URL in Profile first.", "error");
+              setShowProfile(true);
+              return;
+          }
+          textToAppend = `\n\n📍 Find Us: ${userProfile.locationUrl}`;
+      }
+      
+      setGeneratedMessage(prev => prev + textToAppend);
+      showNotification("Action Button added!");
+  };
 
   if (!isLoggedIn) {
-      return <LoginModal onLogin={() => setIsLoggedIn(true)} />;
+    return <LoginModal onLogin={() => setIsLoggedIn(true)} />;
   }
 
+  const toggleSelectAll = () => {
+      if (selectedContactIds.length === contacts.length && contacts.length > 0) {
+          setSelectedContactIds([]);
+      } else {
+          setSelectedContactIds(contacts.map(c => c.id));
+      }
+  };
+
+  const toggleSelectContact = (id: string) => {
+      setSelectedContactIds(prev => 
+          prev.includes(id) ? prev.filter(cid => cid !== id) : [...prev, id]
+      );
+  };
+
+  // Filter contacts for display
+  const filteredContacts = contacts.filter(c => 
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      c.phone.includes(searchTerm)
+  );
+
   const renderDashboard = () => (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-end">
-          <button 
-            onClick={refreshDashboard}
-            className="flex items-center gap-2 text-sm text-slate-500 hover:text-emerald-600 transition-colors bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm"
-          >
-              <RefreshCw className="w-4 h-4" /> Refresh Data
-          </button>
-      </div>
-    
+    <div className="space-y-6 animate-in fade-in duration-300">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm flex items-center justify-between">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-500">Total Contacts</p>
+            <p className="text-sm font-medium text-slate-500 mb-1">Total Contacts</p>
             <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.total}</h3>
           </div>
-          <div className="p-3 bg-emerald-100 text-emerald-600 rounded-lg">
-            <Users />
+          <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
+            <Users className="w-6 h-6" />
           </div>
         </div>
-        <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm flex items-center justify-between">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-500">Messages Sent</p>
+            <p className="text-sm font-medium text-slate-500 mb-1">Messages Sent</p>
             <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.sent}</h3>
           </div>
-          <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
-            <Send />
+          <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
+            <Send className="w-6 h-6" />
           </div>
         </div>
-        <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm flex items-center justify-between">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-500">Response Rate</p>
+            <p className="text-sm font-medium text-slate-500 mb-1">Response Rate</p>
             <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.responseRate}%</h3>
           </div>
-          <div className="p-3 bg-purple-100 text-purple-600 rounded-lg">
-            <MessageSquare />
+          <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-purple-600">
+            <MessageSquare className="w-6 h-6" />
           </div>
         </div>
       </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
+      
+      <div className="relative">
           <DashboardChart data={dashboardStats.chartData} />
+          <button onClick={refreshDashboard} className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors">
+              <RefreshCw className="w-4 h-4" />
+          </button>
+      </div>
+
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-lg font-bold text-slate-800">AI Segment Suggestions</h3>
+          <button 
+            onClick={handleAnalyzeSegments} 
+            disabled={isSegmenting}
+            className="flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+          >
+            {isSegmenting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            Analyze Contacts
+          </button>
         </div>
         
-        <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-xl text-white shadow-lg">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-lg flex items-center gap-2">
-              <Sparkles className="text-yellow-400" /> 
-              AI Segmentation
-            </h3>
-            <button 
-              onClick={handleAnalyzeSegments}
-              disabled={isSegmenting}
-              className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full transition-colors disabled:opacity-50"
-            >
-              {isSegmenting ? 'Analyzing...' : 'Refresh'}
-            </button>
-          </div>
-          
-          <div className="space-y-3">
-            {segments.length === 0 && !isSegmenting && (
-              <div className="text-slate-400 text-sm text-center py-8">
-                Click refresh to identify smart segments in your audience.
-              </div>
-            )}
-            
-            {isSegmenting && (
-               <div className="flex justify-center py-8">
-                 <Loader2 className="animate-spin text-emerald-400" />
-               </div>
-            )}
-
-            {segments.map((seg, idx) => (
-              <div key={idx} className="bg-white/5 p-3 rounded-lg border border-white/10 hover:border-emerald-500/50 transition-all cursor-pointer group" onClick={() => applySegment(seg.contactIds)}>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="font-medium text-emerald-300 group-hover:text-emerald-200">{seg.name}</p>
-                    <p className="text-xs text-slate-400 mt-1">{seg.reason}</p>
-                  </div>
-                  <span className="text-xs bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-300">
-                    {seg.contactIds.length} users
-                  </span>
+        {segments.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {segments.map((segment, idx) => (
+              <div key={idx} className="border border-slate-200 rounded-lg p-4 hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer bg-slate-50 hover:bg-white group" onClick={() => applySegment(segment.contactIds)}>
+                <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-semibold text-slate-800 group-hover:text-emerald-600">{segment.name}</h4>
+                    <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{segment.contactIds.length}</span>
                 </div>
+                <p className="text-sm text-slate-500">{segment.reason}</p>
               </div>
             ))}
           </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderCampaignBuilder = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in slide-in-from-right-4 duration-500">
-      <div className="space-y-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-            <Sparkles className="text-emerald-500" />
-            AI Message Creator
-          </h2>
-          
-          <div className="space-y-4">
-            <FormInput 
-              label="Target Audience" 
-              value={campaignAudience}
-              onChange={(e) => setCampaignAudience(e.target.value)}
-              placeholder="e.g. VIP Customers who bought last month"
-            />
-            
-            <FormTextArea 
-              label="Campaign Goal / Key Points" 
-              value={campaignGoal}
-              onChange={(e) => setCampaignGoal(e.target.value)}
-              placeholder="e.g. Announce 24-hour flash sale on sneakers. 20% off with code FLASH20."
-              rows={4}
-            />
-
-            <div>
-                 <label className="text-sm font-medium text-slate-700 mb-1 block">Message Image (Optional)</label>
-                 <div className="flex items-center gap-4">
-                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-2 bg-slate-50 border border-dashed border-slate-300 rounded-lg p-4 hover:bg-slate-100 transition-colors text-slate-500 text-sm">
-                        <ImageIcon className="w-5 h-5" />
-                        {campaignImage ? 'Change Image' : 'Upload Image'}
-                        <input type="file" className="hidden" accept="image/*" onChange={handleCampaignImageUpload} />
-                    </label>
-                    {campaignImage && (
-                        <div className="w-16 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden relative group">
-                             <img src={campaignImage} alt="Campaign" className="w-full h-full object-cover" />
-                             <button onClick={() => setCampaignImage(null)} className="absolute top-0 right-0 bg-red-500 text-white p-0.5 rounded-bl-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                                <X className="w-3 h-3" />
-                             </button>
-                        </div>
-                    )}
-                 </div>
-            </div>
-            
-            <button 
-              onClick={handleGenerateMessage}
-              disabled={isGenerating || !campaignGoal}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm shadow-emerald-200"
-            >
-              {isGenerating ? <Loader2 className="animate-spin" /> : <Sparkles />}
-              Generate Draft
-            </button>
-          </div>
-        </div>
-
-        {generatedMessage && (
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 ring-2 ring-emerald-500/10">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="text-lg font-semibold text-slate-800">Review Template</h3>
-              <div className="flex gap-2">
-                 <button 
-                    onClick={sendTestToMe}
-                    className="text-xs bg-slate-900 text-white px-3 py-1 rounded hover:bg-slate-800 transition-colors flex items-center gap-1"
-                    title={`Send test to ${TEST_NUMBER}`}
-                 >
-                    <Phone className="w-3 h-3" /> Test to Me
-                 </button>
-              </div>
-            </div>
-            
-            <div className="mb-2 flex gap-2 overflow-x-auto pb-2">
-                 <span className="whitespace-nowrap text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-1 rounded cursor-pointer hover:bg-emerald-100 transition-colors" onClick={() => setGeneratedMessage(prev => prev + ' {firstName}')}>+ {'{firstName}'}</span>
-                 <span className="whitespace-nowrap text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-1 rounded cursor-pointer hover:bg-emerald-100 transition-colors" onClick={() => setGeneratedMessage(prev => prev + ' {name}')}>+ {'{name}'}</span>
-                 <span className="whitespace-nowrap text-xs bg-emerald-50 text-emerald-600 border border-emerald-100 px-2 py-1 rounded cursor-pointer hover:bg-emerald-100 transition-colors" onClick={() => setGeneratedMessage(prev => prev + ' {phone}')}>+ {'{phone}'}</span>
-            </div>
-
-            <textarea 
-              className="w-full p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 text-sm leading-relaxed focus:outline-none focus:border-emerald-500 resize-none h-40 font-mono"
-              value={generatedMessage}
-              onChange={(e) => setGeneratedMessage(e.target.value)}
-            />
-            <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
-              <CheckCircle className="w-3 h-3" />
-              AI Generated content. Click placeholders above to personalize.
-            </p>
+        ) : (
+          <div className="text-center py-10 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+            <Users className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+            <p className="text-slate-500 text-sm">No segments analyzed yet. Click Analyze to group your contacts using AI.</p>
           </div>
         )}
       </div>
+    </div>
+  );
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col h-[600px]">
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <div>
-              <h3 className="font-bold text-slate-800">Recipients</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                  {selectedContactIds.length > 0 ? selectedContactIds.length : contacts.length} Selected
-              </p>
-          </div>
-          <div className="flex items-center gap-2">
-             {/* Select All Toggle */}
-             <button 
-                onClick={() => {
-                    if (selectedContactIds.length === contacts.length) {
-                        setSelectedContactIds([]);
-                    } else {
-                        setSelectedContactIds(contacts.map(c => c.id));
-                    }
-                }}
-                className={`text-xs px-2 py-1.5 rounded border transition-all flex items-center gap-1 ${selectedContactIds.length === contacts.length ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200'}`}
-             >
-                <CheckSquare className="w-3 h-3" /> {selectedContactIds.length === contacts.length ? 'Deselect All' : 'Select All'}
-             </button>
-
-             {/* Bulk Start Button */}
-             <button
-                 onClick={startBulkCampaign}
-                 disabled={contacts.length === 0 || !generatedMessage}
-                 className="text-xs bg-slate-900 text-white px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1 font-medium disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-             >
-                 <Play className="w-3 h-3" /> Start Bulk Send
-             </button>
+  const renderCampaigns = () => (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300 h-full">
+      <div className="lg:col-span-1 space-y-6">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-emerald-500" />
+            AI Message Creator
+          </h3>
+          <div className="space-y-4">
+            <FormInput 
+              label="Campaign Goal" 
+              placeholder="e.g. Promote summer sale" 
+              value={campaignGoal}
+              onChange={(e) => setCampaignGoal(e.target.value)}
+            />
+            <FormInput 
+              label="Target Audience" 
+              placeholder="e.g. Recent buyers" 
+              value={campaignAudience}
+              onChange={(e) => setCampaignAudience(e.target.value)}
+            />
+            <button 
+              onClick={handleGenerateMessage}
+              disabled={isGenerating || !campaignGoal}
+              className="w-full bg-slate-900 text-white py-2.5 rounded-lg font-medium hover:bg-slate-800 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+            >
+              {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Generate Message"}
+            </button>
           </div>
         </div>
-        
-        <div className="flex-1 overflow-y-auto p-2">
-          <div className="space-y-2">
-            {contacts
-              .filter(c => selectedContactIds.length === 0 || selectedContactIds.includes(c.id))
-              .map(contact => (
-              <div key={contact.id} className="group p-4 rounded-lg border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/50 transition-all flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold overflow-hidden bg-slate-100`}>
-                    {contact.avatar ? (
-                        <img src={contact.avatar} alt={contact.name} className="w-full h-full object-cover" />
-                    ) : (
-                        <span className="text-slate-500">{contact.name.charAt(0).toUpperCase()}</span>
-                    )}
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-slate-800">{contact.name}</h4>
-                    <p className="text-xs text-slate-500 flex items-center gap-1">
-                       <Phone className="w-3 h-3" /> {contact.phone}
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => initiateSend(contact)}
-                        disabled={!generatedMessage}
-                        className="opacity-0 group-hover:opacity-100 bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 disabled:opacity-50"
-                    >
-                        <Send className="w-3 h-3" /> Send
-                    </button>
 
-                    <div className="flex items-center border-l border-slate-200 pl-2 ml-2 gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {selectedContactIds.length > 0 && (
-                            <button
-                                onClick={() => removeFromCampaign(contact.id)}
-                                className="text-slate-400 hover:text-amber-500 p-1.5 rounded hover:bg-amber-50 transition-all"
-                                title="Remove from this campaign list"
-                            >
-                                <MinusCircle className="w-4 h-4" />
-                            </button>
-                        )}
-                        <button
-                            onClick={() => deleteContact(contact.id)}
-                            className="text-slate-400 hover:text-red-500 p-1.5 rounded hover:bg-red-50 transition-all"
-                            title="Permanently Delete Contact"
-                        >
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-blue-500" />
+                Campaign Image
+            </h3>
+            <div className="relative">
+                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors">
+                    {campaignImage ? (
+                        <div className="relative w-full h-full">
+                            <img src={campaignImage} alt="Campaign" className="w-full h-full object-cover rounded-lg" />
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white text-xs opacity-0 hover:opacity-100 transition-opacity rounded-lg">
+                                Click to change
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                            <Upload className="w-8 h-8 text-slate-400 mb-2" />
+                            <p className="text-xs text-slate-500">Click to upload image</p>
+                        </div>
+                    )}
+                    <input type="file" className="hidden" accept="image/*" onChange={handleCampaignImageUpload} />
+                </label>
+            </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+            <h3 className="text-lg font-bold text-slate-800 mb-4">Quick Actions</h3>
+            <div className="grid grid-cols-1 gap-3">
+                 <button 
+                    onClick={sendTestToMe}
+                    disabled={!generatedMessage}
+                    className="flex items-center justify-center gap-2 w-full py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:border-emerald-300 hover:text-emerald-700 transition-colors disabled:opacity-50 text-sm font-medium"
+                 >
+                    <Send className="w-4 h-4" /> Send Test to {TEST_NUMBER}
+                 </button>
+            </div>
+        </div>
+      </div>
+
+      <div className="lg:col-span-2 flex flex-col h-full">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-full flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-800">Message Preview</h3>
+              
+              <div className="flex gap-2">
+                  <button onClick={() => appendCTA('call')} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors border border-blue-200">
+                      <Phone className="w-3 h-3" /> Call Us
+                  </button>
+                  <button onClick={() => appendCTA('website')} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors border border-indigo-200">
+                      <Globe className="w-3 h-3" /> Visit Our Website
+                  </button>
+                  <button onClick={() => appendCTA('location')} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors border border-red-200">
+                      <MapPin className="w-3 h-3" /> Share Location
+                  </button>
               </div>
-            ))}
-            {contacts.length === 0 && (
-                <div className="p-8 text-center text-slate-400 text-sm">
-                    No contacts to show. Add some from the "Contacts" tab.
+          </div>
+          
+          <div className="mb-4">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-2">
+                <p className="text-xs text-slate-500 mb-1">Dynamic Placeholders available:</p>
+                <div className="flex gap-2">
+                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{firstName}`}</span>
+                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{name}`}</span>
+                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{phone}`}</span>
                 </div>
-            )}
+            </div>
+            <textarea
+              className="w-full h-48 p-4 bg-slate-50 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-sans resize-none text-slate-700"
+              placeholder="Your generated message will appear here..."
+              value={generatedMessage}
+              onChange={(e) => setGeneratedMessage(e.target.value)}
+            />
+          </div>
+
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-2">
+                <h4 className="font-semibold text-slate-700 text-sm">Recipients ({selectedContactIds.length})</h4>
+                <div className="flex gap-2">
+                    <button 
+                        onClick={toggleSelectAll}
+                        className="text-xs font-medium text-slate-500 hover:text-emerald-600 underline"
+                    >
+                        {selectedContactIds.length === contacts.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto border border-slate-100 rounded-lg bg-slate-50">
+              {contacts.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-400 p-8">
+                      <Users className="w-8 h-8 mb-2" />
+                      <p className="text-sm">No contacts available.</p>
+                  </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                    {contacts.map(contact => {
+                        const isSelected = selectedContactIds.includes(contact.id);
+                        return (
+                            <div key={contact.id} className={`flex items-center justify-between p-3 hover:bg-white transition-colors ${isSelected ? 'bg-emerald-50/50' : ''}`}>
+                                <div className="flex items-center gap-3">
+                                    <button 
+                                        onClick={() => toggleSelectContact(contact.id)}
+                                        className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-slate-300 text-transparent'}`}
+                                    >
+                                        <CheckSquare className="w-3.5 h-3.5" />
+                                    </button>
+                                    <div className="w-8 h-8 rounded-full bg-slate-200 flex-shrink-0 overflow-hidden">
+                                        {contact.avatar ? (
+                                            <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-slate-400"><Users className="w-4 h-4" /></div>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <p className="text-sm font-medium text-slate-800">{contact.name}</p>
+                                        <p className="text-xs text-slate-500">{contact.phone}</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => removeFromCampaign(contact.id)} className="text-slate-400 hover:text-red-500 p-1" title="Remove from list">
+                                        <MinusCircle className="w-4 h-4" />
+                                    </button>
+                                    {isSelected && (
+                                        <button 
+                                            onClick={() => initiateSend(contact)}
+                                            disabled={!generatedMessage}
+                                            className="px-3 py-1.5 bg-emerald-500 text-white text-xs rounded-md hover:bg-emerald-600 disabled:opacity-50"
+                                        >
+                                            Send
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+              )}
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-slate-100">
+                 <button 
+                    onClick={startBulkCampaign}
+                    disabled={selectedContactIds.length < 2 || !generatedMessage}
+                    className="w-full py-3 bg-slate-900 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                     <Play className="w-4 h-4 text-emerald-400" />
+                     Start Bulk Campaign ({selectedContactIds.length > 0 ? selectedContactIds.length : 'All'} recipients)
+                 </button>
+                 <p className="text-center text-xs text-slate-400 mt-2">
+                     Will queue messages and send one by one.
+                 </p>
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
 
-  const renderContacts = () => {
-    const filteredContacts = contacts.filter(c => 
-        c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        c.phone.includes(searchTerm) ||
-        c.tags.some(t => t.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-
-    const allFilteredSelected = filteredContacts.length > 0 && filteredContacts.every(c => selectedContactIds.includes(c.id));
-    const isIndeterminate = filteredContacts.some(c => selectedContactIds.includes(c.id)) && !allFilteredSelected;
-
-    const handleSelectAll = () => {
-        if (allFilteredSelected) {
-            const idsToDeselect = filteredContacts.map(c => c.id);
-            setSelectedContactIds(prev => prev.filter(id => !idsToDeselect.includes(id)));
-        } else {
-            const idsToSelect = filteredContacts.map(c => c.id);
-            setSelectedContactIds(prev => [...new Set([...prev, ...idsToSelect])]);
-        }
-    };
-
-    return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-500">
-        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
-            <h2 className="text-xl font-bold text-slate-800">Contact Management</h2>
-            
-            <div className="flex gap-4 w-full md:w-auto items-center">
-                {selectedContactIds.length > 0 && (
-                    <button 
-                        onClick={handleBulkDelete}
-                        className="bg-red-50 text-red-600 px-3 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-red-100 transition-colors whitespace-nowrap border border-red-100 animate-in fade-in zoom-in-95"
-                    >
-                        <Trash2 className="w-4 h-4" /> Delete ({selectedContactIds.length})
-                    </button>
-                )}
-
-                <div className="relative flex-1 md:w-64">
-                    <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                    <input 
-                        type="text" 
-                        placeholder="Search contacts..." 
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
-                </div>
-                <button 
-                onClick={() => setShowAddContact(true)}
-                className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-800 transition-colors whitespace-nowrap"
-                >
-                    <Plus className="w-4 h-4" /> Add Contacts
-                </button>
-            </div>
+  const renderContacts = () => (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-300 flex flex-col h-full">
+      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+        <h3 className="text-lg font-bold text-slate-800">Contact Management</h3>
+        <div className="flex gap-3">
+          <div className="relative">
+             <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+             <input 
+                type="text" 
+                placeholder="Search contacts..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-64"
+             />
+          </div>
+          {selectedContactIds.length > 0 && (
+              <button 
+                onClick={handleBulkDelete}
+                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors border border-red-200"
+              >
+                  <Trash2 className="w-4 h-4" /> Delete ({selectedContactIds.length})
+              </button>
+          )}
+          <button 
+            onClick={() => setShowAddContact(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Add Contact
+          </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-              <thead className="bg-slate-50 text-slate-500 text-sm uppercase">
-                  <tr>
-                      <th className="p-4 w-10">
-                          <input 
-                            type="checkbox" 
-                            className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer accent-emerald-500"
-                            checked={allFilteredSelected}
-                            ref={input => { if (input) input.indeterminate = isIndeterminate; }}
-                            onChange={handleSelectAll}
-                          />
-                      </th>
-                      <th className="p-4 font-medium w-16">Avatar</th>
-                      <th className="p-4 font-medium">Name</th>
-                      <th className="p-4 font-medium">Phone</th>
-                      <th className="p-4 font-medium">Tags</th>
-                      <th className="p-4 font-medium">Last Interaction</th>
-                      <th className="p-4 font-medium text-right">Actions</th>
-                  </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                  {filteredContacts.map(contact => {
-                      const isSelected = selectedContactIds.includes(contact.id);
-                      return (
-                      <tr key={contact.id} className={`hover:bg-slate-50 transition-colors ${isSelected ? 'bg-emerald-50/30' : ''}`}>
-                          <td className="p-4">
-                              <input 
-                                type="checkbox" 
-                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer accent-emerald-500"
-                                checked={isSelected}
-                                onChange={() => {
-                                    if (isSelected) {
-                                        setSelectedContactIds(prev => prev.filter(id => id !== contact.id));
-                                    } else {
-                                        setSelectedContactIds(prev => [...prev, contact.id]);
-                                    }
-                                }}
-                              />
-                          </td>
-                          <td className="p-4">
-                             <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center">
-                                {contact.avatar ? (
-                                    <img src={contact.avatar} alt={contact.name} className="w-full h-full object-cover" />
-                                ) : (
-                                    <Users className="w-5 h-5 text-slate-400" />
-                                )}
-                             </div>
-                          </td>
-                          <td className="p-4 font-medium text-slate-800">{contact.name}</td>
-                          <td className="p-4 text-slate-600 font-mono text-sm">{contact.phone}</td>
-                          <td className="p-4">
-                              <div className="flex gap-1 flex-wrap">
-                                  {contact.tags.map(tag => (
-                                      <span key={tag} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md border border-slate-200">
-                                          {tag}
-                                      </span>
-                                  ))}
-                              </div>
-                          </td>
-                          <td className="p-4 text-slate-500 text-sm">{contact.lastInteraction}</td>
-                          <td className="p-4 text-right">
-                              <button 
-                                onClick={() => deleteContact(contact.id)}
-                                className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-red-50 transition-all"
-                                title="Delete Permanently"
-                              >
-                                  <Trash2 className="w-4 h-4" />
-                              </button>
-                          </td>
-                      </tr>
-                  )})}
-                  {filteredContacts.length === 0 && (
-                      <tr>
-                          <td colSpan={7} className="p-8 text-center text-slate-400">
-                              {searchTerm ? 'No contacts match your search.' : 'No contacts found. Click "Add Contacts" to get started.'}
-                          </td>
-                      </tr>
-                  )}
-              </tbody>
-          </table>
-        </div>
+      </div>
+      
+      <div className="overflow-x-auto flex-1">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+              <th className="p-4 w-12">
+                  <button 
+                    onClick={toggleSelectAll} 
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedContactIds.length > 0 && selectedContactIds.length === contacts.length ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}
+                  >
+                      {selectedContactIds.length > 0 && selectedContactIds.length === contacts.length && <CheckSquare className="w-3 h-3 text-white" />}
+                  </button>
+              </th>
+              <th className="p-4">Name</th>
+              <th className="p-4">Phone</th>
+              <th className="p-4">Tags</th>
+              <th className="p-4">Last Interaction</th>
+              <th className="p-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {filteredContacts.length > 0 ? (
+                filteredContacts.map((contact) => (
+                <tr key={contact.id} className="hover:bg-slate-50 transition-colors group">
+                    <td className="p-4">
+                         <button 
+                            onClick={() => toggleSelectContact(contact.id)}
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedContactIds.includes(contact.id) ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}
+                        >
+                            {selectedContactIds.includes(contact.id) && <CheckSquare className="w-3 h-3 text-white" />}
+                        </button>
+                    </td>
+                    <td className="p-4">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 text-xs font-bold overflow-hidden border border-slate-200">
+                            {contact.avatar ? (
+                                <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                                contact.name.charAt(0)
+                            )}
+                        </div>
+                        <span className="font-medium text-slate-800">{contact.name}</span>
+                    </div>
+                    </td>
+                    <td className="p-4 text-slate-600 font-mono text-sm">{contact.phone}</td>
+                    <td className="p-4">
+                    <div className="flex gap-2 flex-wrap">
+                        {contact.tags.map((tag, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs border border-slate-200">
+                            {tag}
+                        </span>
+                        ))}
+                    </div>
+                    </td>
+                    <td className="p-4 text-slate-500 text-sm">{contact.lastInteraction}</td>
+                    <td className="p-4 text-right">
+                        <button 
+                            onClick={() => deleteContact(contact.id)}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                            title="Delete Contact"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                    </td>
+                </tr>
+                ))
+            ) : (
+                <tr>
+                    <td colSpan={6} className="p-8 text-center text-slate-400">
+                        No contacts found. Add some to get started.
+                    </td>
+                </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
-    );
-  };
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white font-serif font-bold text-xl shadow-lg shadow-emerald-500/20">
+             D
+          </div>
+          <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-teal-500">DesiChai</h1>
+        </div>
+        
+        {/* Nav Tabs - Centered */}
+        <div className="hidden md:flex bg-slate-100 p-1 rounded-lg">
+            {(['dashboard', 'campaigns', 'contacts'] as ViewState[]).map(view => (
+                <button
+                    key={view}
+                    onClick={() => setCurrentView(view)}
+                    className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all ${currentView === view ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                    {view.charAt(0).toUpperCase() + view.slice(1)}
+                </button>
+            ))}
+        </div>
+
+        <button onClick={() => setShowProfile(true)} className="flex items-center gap-3 hover:bg-slate-50 p-1.5 pr-3 rounded-full transition-colors border border-transparent hover:border-slate-100">
+          <div className="w-8 h-8 rounded-full bg-slate-200 overflow-hidden border border-slate-200">
+             <img src={userProfile.avatar} alt="User" className="w-full h-full object-cover" />
+          </div>
+          <span className="text-sm font-medium text-slate-700 hidden sm:block">{userProfile.name}</span>
+        </button>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-6">
+        {currentView === 'dashboard' && renderDashboard()}
+        {currentView === 'campaigns' && renderCampaigns()}
+        {currentView === 'contacts' && renderContacts()}
+      </main>
+
+      {/* Floating Notification Toast */}
+      {notification && (
+          <div className={`fixed bottom-6 right-6 px-6 py-3 rounded-xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-300 z-[100] ${notification.type === 'success' ? 'bg-white border-emerald-100 text-slate-800' : 'bg-red-50 border-red-100 text-red-800'}`}>
+              {notification.type === 'success' ? <CheckCircle className="w-5 h-5 text-emerald-500" /> : <AlertTriangle className="w-5 h-5 text-red-500" />}
+              <span className="font-medium text-sm">{notification.message}</span>
+          </div>
+      )}
+
+      {/* Modals */}
+      <ProfileModal 
+        isOpen={showProfile} 
+        onClose={() => setShowProfile(false)} 
+        user={userProfile}
+        onLogout={handleLogout}
+        onUpdateAvatar={handleProfileUpdate}
+        onExportData={handleExportData}
+        onImportData={handleImportData}
+        onUpdateUser={handleUpdateUser}
+      />
+      
+      <AddContactModal 
+        isOpen={showAddContact} 
+        onClose={() => setShowAddContact(false)} 
+        onAddSingle={handleSingleAdd}
+        onAddBulk={handleBulkAdd}
+      />
+      
       <ConfirmationModal 
         isOpen={showConfirmation} 
         onClose={() => setShowConfirmation(false)} 
@@ -1424,118 +1600,18 @@ const App: React.FC = () => {
         campaignImage={campaignImage}
         personalizeMessage={personalizeMessage}
       />
+
       <BulkSendModal 
-        isOpen={isBulkSending}
-        queue={bulkQueue}
-        currentIndex={bulkCurrentIndex}
-        message={generatedMessage}
-        image={campaignImage}
-        onClose={() => setIsBulkSending(false)}
-        onSendNext={handleBulkSendNext}
-        onSkip={handleBulkSkip}
-        personalizeMessage={personalizeMessage}
+         isOpen={isBulkSending}
+         queue={bulkQueue}
+         currentIndex={bulkCurrentIndex}
+         message={generatedMessage}
+         image={campaignImage}
+         onClose={() => setIsBulkSending(false)}
+         onSendNext={handleBulkSendNext}
+         onSkip={handleBulkSkip}
+         personalizeMessage={personalizeMessage}
       />
-      <AddContactModal 
-        isOpen={showAddContact} 
-        onClose={() => setShowAddContact(false)}
-        onAddSingle={handleSingleAdd}
-        onAddBulk={handleBulkAdd}
-      />
-      <ProfileModal 
-        isOpen={showProfile}
-        onClose={() => setShowProfile(false)}
-        user={userProfile}
-        onLogout={handleLogout}
-        onUpdateAvatar={handleProfileUpdate}
-        onExportData={handleExportData}
-        onImportData={handleImportData}
-      />
-      
-      {/* Toast Notification */}
-      {notification && (
-        <div className={`fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-in slide-in-from-top-2 duration-300 ${
-            notification.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
-        }`}>
-            {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-            <span className="font-medium text-sm">{notification.message}</span>
-        </div>
-      )}
-      
-      {/* Sidebar */}
-      <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-10 transition-all">
-        <div className="h-16 flex items-center justify-center lg:justify-start lg:px-6 border-b border-slate-100">
-          <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-emerald-200 font-serif">
-            D
-          </div>
-          <span className="ml-3 font-bold text-lg hidden lg:block">DesiChai</span>
-        </div>
-
-        <nav className="p-4 space-y-2 flex-1">
-          <button 
-            onClick={() => setCurrentView('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentView === 'dashboard' ? 'bg-emerald-50 text-emerald-600 font-medium' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <LayoutDashboard />
-            <span className="hidden lg:block">Dashboard</span>
-          </button>
-          
-          <button 
-            onClick={() => setCurrentView('campaigns')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentView === 'campaigns' ? 'bg-emerald-50 text-emerald-600 font-medium' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Send />
-            <span className="hidden lg:block">Campaigns</span>
-          </button>
-
-          <button 
-            onClick={() => setCurrentView('contacts')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentView === 'contacts' ? 'bg-emerald-50 text-emerald-600 font-medium' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Users />
-            <span className="hidden lg:block">Contacts</span>
-          </button>
-        </nav>
-
-        <div className="p-4 border-t border-slate-100">
-          <div className="bg-slate-900 rounded-xl p-4 text-white hidden lg:block">
-            <p className="text-xs text-slate-400 mb-1">Credits used</p>
-            <div className="w-full bg-slate-700 h-1.5 rounded-full mb-2">
-              <div className="bg-emerald-400 h-1.5 rounded-full w-[65%]"></div>
-            </div>
-            <p className="text-xs font-medium">324 / 500 AI Generations</p>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 ml-20 lg:ml-64 p-4 lg:p-8 overflow-y-auto">
-        <header className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 capitalize">
-              {currentView}
-            </h1>
-            <p className="text-slate-500 text-sm">Welcome back, here's what's happening today.</p>
-          </div>
-          <div className="flex items-center gap-4">
-             <button 
-                onClick={() => setShowProfile(true)}
-                className="w-10 h-10 rounded-full bg-slate-200 border-2 border-white shadow-sm overflow-hidden hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer"
-             >
-                 <img src={userProfile.avatar} alt="Profile" className="w-full h-full object-cover" />
-             </button>
-          </div>
-        </header>
-
-        {currentView === 'dashboard' && renderDashboard()}
-        {currentView === 'campaigns' && renderCampaignBuilder()}
-        {currentView === 'contacts' && renderContacts()}
-      </main>
     </div>
   );
 };
