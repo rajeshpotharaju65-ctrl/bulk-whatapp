@@ -7,7 +7,7 @@ import {
   Upload, Play, StopCircle, Clock, Trash2, CheckCircle,
   AlertTriangle, Save, Loader2, Phone, CheckSquare,
   ImageIcon, FastForward, UploadCloud, RefreshCw, X, UserPlus, CreditCard,
-  Edit, Lock, CheckCircle as CheckDouble 
+  Edit, Lock, CheckCircle as CheckDouble, Camera 
 } from './components/Icons';
 import { DashboardChart } from './components/DashboardChart';
 import { FormInput, FormTextArea } from './components/FormInput';
@@ -189,6 +189,7 @@ const App: React.FC = () => {
   const statusRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
+  const profileImgInputRef = useRef<HTMLInputElement>(null);
 
   // --- DERIVED DATA ---
   const getFilteredContacts = () => {
@@ -652,6 +653,7 @@ const App: React.FC = () => {
         if (data.templates) setTemplates(data.templates);
         if (data.campaigns) setCampaigns(data.campaigns);
         if (data.user) setUser(data.user);
+        if (data.logs) setLogs(data.logs); // Restore logs so they appear in dashboard
         alert('Data restored successfully!');
       } catch (err) {
         alert('Failed to restore data.');
@@ -704,6 +706,17 @@ const App: React.FC = () => {
 
       setCampaigns(prev => [campaign, ...prev]);
       alert(`Started background sending engine for ${tempIds.length} numbers.`);
+  };
+
+  // --- PROFILE IMAGE UPLOAD ---
+  const handleProfileImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+       setUser(prev => ({...prev, avatar: ev.target?.result as string}));
+    };
+    reader.readAsDataURL(file);
   };
 
   const QuickPasteModal = () => {
@@ -1569,16 +1582,26 @@ const App: React.FC = () => {
                 <button onClick={() => setIsProfileModalOpen(false)}><X className="w-5 h-5 text-slate-400 hover:text-slate-600"/></button>
              </div>
              <div className="space-y-4">
-                <div className="flex justify-center mb-4">
-                   <img src={user.avatar} alt="Avatar" className="w-20 h-20 rounded-full bg-slate-200 border-4 border-slate-50"/>
+                <div className="flex justify-center mb-6">
+                   <div className="relative group cursor-pointer" onClick={() => profileImgInputRef.current?.click()}>
+                       <img src={user.avatar} alt="Avatar" className="w-24 h-24 rounded-full bg-slate-200 border-4 border-slate-50 object-cover"/>
+                       <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                           <Camera className="w-8 h-8 text-white"/>
+                       </div>
+                       <div className="absolute bottom-0 right-0 bg-emerald-600 p-2 rounded-full border-2 border-white shadow-sm">
+                           <Upload className="w-3 h-3 text-white"/>
+                       </div>
+                   </div>
+                   <input type="file" ref={profileImgInputRef} onChange={handleProfileImageUpload} className="hidden" accept="image/*"/>
                 </div>
+
                 <FormInput label="Name" value={user.name} onChange={e => setUser({...user, name: e.target.value})} />
                 <FormInput label="Company" value={user.company} onChange={e => setUser({...user, company: e.target.value})} />
                 <div className="grid grid-cols-2 gap-2">
                     <FormInput label="Username" value={user.username} onChange={e => setUser({...user, username: e.target.value})} />
                     <FormInput label="Password" type="password" value={user.password || ''} onChange={e => setUser({...user, password: e.target.value})} />
                 </div>
-                <FormInput label="Avatar URL" value={user.avatar} onChange={e => setUser({...user, avatar: e.target.value})} />
+                
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
                   <label className="text-sm font-medium text-slate-700 mb-2 block">Sending Speed (Seconds Delay)</label>
                   <input 
