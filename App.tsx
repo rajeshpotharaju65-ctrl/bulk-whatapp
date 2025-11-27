@@ -1,2099 +1,1402 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { LayoutDashboard, Users, MessageSquare, Send, Sparkles, Plus, CheckCircle, Loader2, Phone, X, AlertTriangle, Trash2, Upload, FileText, UserPlus, Search, ImageIcon, MinusCircle, LogOut, Lock, Mail, Settings, CreditCard, Camera, RefreshCw, Download, UploadCloud, Play, StopCircle, FastForward, CheckSquare, Globe, MapPin, Link, Calendar, Clock, Edit } from './components/Icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  LayoutDashboard, Users, MessageSquare, Plus, Search, 
+  Settings, LogOut, Menu, Bell, Link as LinkIcon,
+  Sparkles, Send, Globe, MapPin, FileText, Download,
+  Upload, Play, StopCircle, Clock, Trash2, CheckCircle,
+  AlertTriangle, Save, Loader2, Phone, CheckSquare,
+  ImageIcon, FastForward, UploadCloud, RefreshCw, X, UserPlus, CreditCard,
+  Edit, Lock
+} from './components/Icons';
 import { DashboardChart } from './components/DashboardChart';
 import { FormInput, FormTextArea } from './components/FormInput';
 import { generateCampaignMessage, analyzeSegments } from './services/geminiService';
-import { Contact, Campaign, ViewState, ChartData, UserProfile } from './types';
+import { Contact, Campaign, ViewState, UserProfile, MessageTemplate, LogEntry, ContactFilters } from './types';
 
-// Robust ID generator
-const generateId = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
-};
-
-// Mock Data used only if LocalStorage is empty - NOW EMPTY for fresh start
-const DEFAULT_CONTACTS: Contact[] = [];
-
-const DEFAULT_PROFILE: UserProfile = {
-    name: 'Admin User',
-    email: 'admin@desichai.com',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-    company: 'DesiChai',
-    plan: 'Pro',
-    businessPhone: '+1234567890',
-    website: 'www.desichai.com',
-    locationUrl: ''
-};
-
-// Zeroed out chart data for fresh start
-const MOCK_CHART_DATA: ChartData[] = [
-  { name: 'Mon', sent: 0, replies: 0 },
-  { name: 'Tue', sent: 0, replies: 0 },
-  { name: 'Wed', sent: 0, replies: 0 },
-  { name: 'Thu', sent: 0, replies: 0 },
-  { name: 'Fri', sent: 0, replies: 0 },
-  { name: 'Sat', sent: 0, replies: 0 },
-  { name: 'Sun', sent: 0, replies: 0 },
+// --- INITIAL DATA ---
+const INITIAL_CONTACTS: Contact[] = [
+  { id: '1', name: 'Alice Johnson', phone: '+1234567890', tags: ['vip'], lastInteraction: '2023-10-25', sentiment: 'positive', company: 'Acme Corp', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alice' },
+  { id: '2', name: 'Bob Smith', phone: '+1987654321', tags: ['lead'], lastInteraction: '2023-10-24', sentiment: 'neutral', company: 'Global Tech', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Bob' },
+  { id: '3', name: 'Charlie Brown', phone: '+1122334455', tags: ['inactive'], lastInteraction: '2023-10-20', sentiment: 'negative', company: 'Local Shop', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Charlie' },
+  { id: '4', name: 'David Lee', phone: '+1555666777', tags: ['vip', 'wholesale'], lastInteraction: '2023-10-28', sentiment: 'positive', company: 'Lee Imports', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=David' },
+  { id: '5', name: 'Eva Green', phone: '+1999888777', tags: ['new'], lastInteraction: '2023-11-01', sentiment: 'neutral', company: 'Green Gardens', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Eva' },
 ];
 
-// Helper: Convert any image data URI to a PNG Blob for Clipboard compatibility
-// Browsers typically only support 'image/png' for clipboard.write
-const convertImageToPngBlob = (dataUrl: string): Promise<Blob> => {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-                reject(new Error("Canvas context failed"));
-                return;
-            }
-            ctx.drawImage(img, 0, 0);
-            canvas.toBlob(blob => {
-                if (blob) resolve(blob);
-                else reject(new Error("Blob conversion failed"));
-            }, 'image/png');
-        };
-        img.onerror = (err) => reject(err);
-        img.src = dataUrl;
-    });
+const INITIAL_TEMPLATES: MessageTemplate[] = [
+  { 
+    id: 't1', 
+    name: 'Welcome Message', 
+    content: 'Hi {{name}}, thanks for joining us at {{company}}! Check out our latest collection.', 
+    variables: ['name', 'company'], 
+    type: 'button',
+    buttons: [
+      { type: 'url', label: 'Visit Website', value: 'https://myshop.com' },
+      { type: 'location', label: 'Find Store', value: 'https://maps.google.com' }
+    ] 
+  },
+  {
+    id: 't2',
+    name: 'Product Showcase',
+    content: 'Hello {{name}}, take a look at our new arrival! 👇',
+    variables: ['name'],
+    type: 'image',
+    mediaUrl: '' // Empty by default so user can upload
+  }
+];
+
+const INITIAL_USER: UserProfile = {
+  username: 'admin',
+  password: '123',
+  name: 'Admin User',
+  email: 'admin@whatsappmanager.com',
+  company: 'Business Pro',
+  avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin',
+  settings: { delaySeconds: 3, autoRetry: true }
 };
 
-// --- MODALS (Extracted to prevent re-render lag) ---
+// --- HELPER COMPONENTS ---
 
-interface ConfirmationModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  pendingContact: Contact | null;
-  generatedMessage: string;
-  campaignImage: string | null;
-  personalizeMessage: (msg: string, contact: Contact) => string;
-}
-
-const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ 
-  isOpen, onClose, onConfirm, pendingContact, generatedMessage, campaignImage, personalizeMessage 
-}) => {
-  const [copySuccess, setCopySuccess] = useState(false);
-
-  if (!isOpen || !pendingContact) return null;
-  
-  const previewMessage = personalizeMessage(generatedMessage, pendingContact);
-
-  const handleManualCopy = async () => {
-    if (campaignImage) {
-        try {
-            const blob = await convertImageToPngBlob(campaignImage);
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-            setCopySuccess(true);
-            setTimeout(() => setCopySuccess(false), 2000);
-        } catch (err) {
-            console.error("Manual copy failed", err);
-            alert("Failed to copy image. Browser might not support this format.");
-        }
-    }
+const StatusBadge = ({ status }: { status: string }) => {
+  const colors: Record<string, string> = {
+    draft: 'bg-slate-100 text-slate-600',
+    scheduled: 'bg-blue-100 text-blue-700',
+    running: 'bg-emerald-100 text-emerald-700 animate-pulse',
+    paused: 'bg-amber-100 text-amber-700',
+    completed: 'bg-purple-100 text-purple-700',
+    sent: 'bg-green-100 text-green-700',
+    failed: 'bg-red-100 text-red-700',
+    queued: 'bg-gray-100 text-gray-600',
+    sending: 'bg-yellow-100 text-yellow-700'
   };
-
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden border border-slate-100 animate-in zoom-in-95 duration-200">
-        <div className="p-6">
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex items-center gap-3 text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full">
-               <AlertTriangle className="w-5 h-5" />
-               <span className="text-sm font-semibold">Confirm Send</span>
-            </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          
-          <h3 className="text-lg font-bold text-slate-800 mb-2">Ready to send?</h3>
-          <p className="text-slate-500 text-sm mb-4">
-            This will open WhatsApp Web to send the message to <span className="font-semibold text-slate-800">{pendingContact.name}</span>.
-          </p>
-          
-          <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 relative max-h-[60vh] overflow-y-auto">
-            <p className="text-sm text-slate-700 whitespace-pre-wrap font-mono">{previewMessage}</p>
-            
-            {campaignImage && (
-                <div className="mt-4 border-t border-slate-200 pt-3">
-                    <p className="text-xs text-slate-500 mb-2 flex items-center gap-1 font-semibold">
-                        <ImageIcon className="w-3 h-3" /> Campaign Image Attachment
-                    </p>
-                    <div className="rounded-lg overflow-hidden w-full border border-slate-200 bg-slate-100 relative mb-3">
-                        <img 
-                            src={campaignImage} 
-                            className="w-full h-auto max-h-64 object-contain mx-auto" 
-                            alt="Campaign Preview" 
-                        />
-                    </div>
-                    
-                    <div className="bg-red-50 border border-red-100 p-3 rounded-lg">
-                        <p className="text-xs text-red-700 font-bold flex items-center gap-2 mb-2">
-                             <AlertTriangle className="w-4 h-4" />
-                             ACTION REQUIRED
-                        </p>
-                        <p className="text-xs text-red-600 mb-2">
-                             WhatsApp Web does not support automatic image attaching.
-                        </p>
-                        <p className="text-xs text-slate-700 mb-3 font-medium">
-                            Step 1: The image will be copied to your clipboard automatically. <br/>
-                            Step 2: Press <span className="bg-slate-200 px-1 rounded font-mono">Ctrl+V</span> (Paste) when WhatsApp opens.
-                        </p>
-                        <button 
-                            onClick={handleManualCopy}
-                            className={`w-full py-2 rounded text-xs font-bold transition-all border ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-                        >
-                            {copySuccess ? '✓ Copied!' : 'Click here to Copy Image Manually'}
-                        </button>
-                    </div>
-                </div>
-            )}
-          </div>
-          
-          <div className="flex gap-3">
-            <button onClick={onClose} className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium transition-colors">
-              Cancel
-            </button>
-            <button onClick={onConfirm} className="flex-1 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
-              <Send className="w-4 h-4" /> Open WhatsApp
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium uppercase tracking-wide ${colors[status] || colors.draft}`}>
+      {status}
+    </span>
   );
 };
 
-interface BulkSendModalProps {
-  isOpen: boolean;
-  queue: Contact[];
-  currentIndex: number;
-  message: string;
-  image: string | null;
-  onClose: () => void;
-  onSendNext: () => Promise<boolean>; // Returns true if window opened successfully
-  onSkip: () => void;
-  personalizeMessage: (msg: string, contact: Contact) => string;
-}
-
-const BulkSendModal: React.FC<BulkSendModalProps> = ({ 
-    isOpen, queue, currentIndex, message, image, onClose, onSendNext, onSkip, personalizeMessage 
-}) => {
-    const [copySuccess, setCopySuccess] = useState(false);
-    const [isAutoSending, setIsAutoSending] = useState(false);
-    const [countdown, setCountdown] = useState(3);
-    const [popupBlocked, setPopupBlocked] = useState(false);
-
-    // Reset auto-send when modal closes or queue finishes
-    useEffect(() => {
-        if (!isOpen || currentIndex >= queue.length) {
-            setIsAutoSending(false);
-            setPopupBlocked(false);
-            setCountdown(3);
-        }
-    }, [isOpen, currentIndex, queue.length]);
-
-    // Auto-Send Timer Logic
-    useEffect(() => {
-        let timer: ReturnType<typeof setTimeout>;
-        if (isAutoSending && currentIndex < queue.length) {
-            if (countdown > 0) {
-                timer = setTimeout(() => setCountdown(prev => prev - 1), 1000);
-            } else {
-                // Time to send
-                const runAutoSend = async () => {
-                    const success = await onSendNext();
-                    if (!success) {
-                        setIsAutoSending(false);
-                        setPopupBlocked(true);
-                    }
-                    setCountdown(3); // Reset timer for next
-                };
-                runAutoSend();
-            }
-        }
-        return () => clearTimeout(timer);
-    }, [isAutoSending, countdown, currentIndex, queue.length, onSendNext]);
-
-    if (!isOpen) return null;
-
-    const currentContact = queue[currentIndex];
-    const isComplete = currentIndex >= queue.length;
-    const progress = Math.min(((currentIndex) / queue.length) * 100, 100);
-
-    const handleManualCopy = async () => {
-        if (image) {
-            try {
-                const blob = await convertImageToPngBlob(image);
-                await navigator.clipboard.write([
-                    new ClipboardItem({ 'image/png': blob })
-                ]);
-                setCopySuccess(true);
-                setTimeout(() => setCopySuccess(false), 2000);
-            } catch (err) {
-                console.error("Manual copy failed", err);
-                alert("Failed to copy image. Browser restriction.");
-            }
-        }
-    };
-
-    const toggleAutoSend = () => {
-        setPopupBlocked(false);
-        if (!isAutoSending) {
-            setCountdown(3);
-        }
-        setIsAutoSending(!isAutoSending);
-    };
-
-    return (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh] relative">
-                 
-                 {/* Popup Blocked Overlay */}
-                 {popupBlocked && (
-                     <div className="absolute inset-0 z-50 bg-white/95 flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
-                         <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mb-4">
-                             <AlertTriangle className="w-10 h-10 text-red-600" />
-                         </div>
-                         <h3 className="text-2xl font-bold text-red-600 mb-2">Pop-up Blocked!</h3>
-                         <p className="text-slate-600 mb-6 max-w-xs">
-                             Your browser blocked the WhatsApp tab from opening automatically.
-                         </p>
-                         <div className="bg-slate-100 p-4 rounded-xl border border-slate-200 text-left text-sm text-slate-700 mb-6 space-y-2">
-                             <p className="font-bold">How to fix:</p>
-                             <p>1. Look for the <span className="inline-block border border-slate-300 rounded px-1 bg-white">Pop-up blocked</span> icon in your address bar.</p>
-                             <p>2. Click it and select <strong>"Always allow..."</strong></p>
-                             <p>3. Click <strong>Try Again</strong> below.</p>
-                         </div>
-                         <button 
-                             onClick={() => { setPopupBlocked(false); setIsAutoSending(false); }}
-                             className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
-                         >
-                             I've Allowed Pop-ups, Try Again
-                         </button>
-                     </div>
-                 )}
-
-                 {/* Header */}
-                 <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
-                    <div>
-                        <h3 className="text-lg font-bold flex items-center gap-2">
-                            <Play className="w-5 h-5 text-emerald-400" /> Bulk Campaign
-                        </h3>
-                        <p className="text-slate-400 text-xs mt-1">
-                            Sending {queue.length} messages
-                        </p>
-                    </div>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors bg-white/10 p-2 rounded-full">
-                        <StopCircle className="w-5 h-5" />
-                    </button>
-                 </div>
-
-                 {/* Progress Bar */}
-                 <div className="bg-slate-100 h-2 w-full">
-                     <div className="bg-emerald-500 h-2 transition-all duration-300" style={{ width: `${progress}%` }}></div>
-                 </div>
-
-                 {/* Content */}
-                 <div className="p-8 flex-1 flex flex-col items-center justify-center overflow-y-auto">
-                     {isComplete ? (
-                         <div className="text-center py-8">
-                             <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6 text-emerald-600">
-                                 <CheckCircle className="w-10 h-10" />
-                             </div>
-                             <h3 className="text-2xl font-bold text-slate-800 mb-2">Campaign Complete!</h3>
-                             <p className="text-slate-500 mb-8">Successfully processed {queue.length} contacts.</p>
-                             <button onClick={onClose} className="bg-emerald-600 text-white px-8 py-3 rounded-xl font-medium hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200">
-                                 Close & View Report
-                             </button>
-                         </div>
-                     ) : (
-                         <div className="w-full flex flex-col items-center">
-                             
-                             {/* Countdown Ring */}
-                             {isAutoSending && (
-                                 <div className="mb-6 relative">
-                                     <div className="w-24 h-24 rounded-full border-4 border-slate-100 flex items-center justify-center relative overflow-hidden">
-                                        <div 
-                                            className="absolute bottom-0 left-0 right-0 bg-emerald-100/50 transition-all duration-1000 ease-linear"
-                                            style={{ height: `${(countdown/3) * 100}%` }}
-                                        ></div>
-                                        <span className="text-4xl font-bold text-emerald-600 relative z-10">{countdown}</span>
-                                     </div>
-                                     <p className="text-center text-xs font-bold text-emerald-600 uppercase mt-2 tracking-wide">Sending Next...</p>
-                                 </div>
-                             )}
-
-                             <div className="text-center mb-6">
-                                 {!isAutoSending && <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Current Recipient ({currentIndex + 1}/{queue.length})</p>}
-                                 
-                                 <div className="w-16 h-16 mx-auto rounded-full bg-slate-100 mb-3 border-4 border-white shadow-lg overflow-hidden">
-                                    {currentContact?.avatar ? (
-                                        <img src={currentContact.avatar} alt={currentContact.name} className="w-full h-full object-cover" />
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-slate-400"><Users className="w-8 h-8" /></div>
-                                    )}
-                                 </div>
-                                 <h2 className="text-xl font-bold text-slate-800">{currentContact?.name}</h2>
-                                 <p className="text-slate-500 font-mono mb-1">{currentContact?.phone}</p>
-                             </div>
-
-                             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 relative w-full">
-                                 <p className="text-sm text-slate-600 line-clamp-3 font-mono italic">
-                                     "{personalizeMessage(message, currentContact)}"
-                                 </p>
-                                 {image && (
-                                     <div className="absolute top-2 right-2">
-                                         <ImageIcon className="w-5 h-5 text-emerald-500" />
-                                     </div>
-                                 )}
-                             </div>
-
-                             {/* Auto Send Controls */}
-                             <div className="flex items-center justify-between mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100 w-full">
-                                <div className="flex items-center gap-2">
-                                    <div className={`w-3 h-3 rounded-full ${isAutoSending ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div>
-                                    <span className="text-sm font-semibold text-slate-700">
-                                        {isAutoSending ? `Auto-Mode Active` : 'Auto-Send Off'}
-                                    </span>
-                                </div>
-                                <button 
-                                    onClick={toggleAutoSend}
-                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-sm ${isAutoSending ? 'bg-white text-red-600 border border-red-200 hover:bg-red-50' : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-200'}`}
-                                >
-                                    {isAutoSending ? 'Pause Auto-Send' : 'Start Auto-Send'}
-                                </button>
-                             </div>
-
-                             {image && (
-                                 <div className="bg-red-50 border border-red-100 p-3 rounded-xl mb-6 w-full">
-                                     <div className="flex items-start gap-2 mb-2">
-                                         <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-                                         <div>
-                                             <p className="text-sm font-bold text-red-700">Image Attached</p>
-                                             <p className="text-xs text-red-600">WhatsApp Web requires manual paste.</p>
-                                         </div>
-                                     </div>
-                                     <button 
-                                        onClick={handleManualCopy}
-                                        className={`w-full py-2 rounded-lg text-xs font-bold transition-all border flex items-center justify-center gap-2 ${copySuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-                                     >
-                                        <ImageIcon className="w-3 h-3" />
-                                        {copySuccess ? 'Image Copied Successfully!' : 'Click to Copy Image Manually'}
-                                     </button>
-                                 </div>
-                             )}
-
-                             <div className="grid grid-cols-2 gap-4 w-full">
-                                 <button 
-                                     onClick={onSkip}
-                                     className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 transition-colors"
-                                 >
-                                     <FastForward className="w-5 h-5" /> Skip
-                                 </button>
-                                 <button 
-                                     onClick={() => onSendNext()}
-                                     className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition-all shadow-lg hover:-translate-y-1"
-                                 >
-                                     <Send className="w-5 h-5" /> Send Now
-                                 </button>
-                             </div>
-                         </div>
-                     )}
-                 </div>
-             </div>
-        </div>
-    );
+// Helper to replace variables
+const fillTemplate = (content: string, contact: Contact) => {
+  let text = content;
+  text = text.replace(/{{name}}/g, contact.name);
+  text = text.replace(/{{phone}}/g, contact.phone);
+  text = text.replace(/{{company}}/g, contact.company || '');
+  // Generic fallback for other keys
+  text = text.replace(/{{(\w+)}}/g, (match, key) => {
+    return (contact as any)[key] || match;
+  });
+  return text;
 };
 
-interface ScheduleModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSchedule: (date: string, time: string) => void;
+// Helper to convert Base64 to Blob for clipboard
+const dataURItoBlob = (dataURI: string) => {
+  try {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], {type: mimeString});
+  } catch (e) {
+    console.error("Failed to convert image", e);
+    return null;
+  }
 }
 
-const ScheduleModal: React.FC<ScheduleModalProps> = ({ isOpen, onClose, onSchedule }) => {
-    const [date, setDate] = useState('');
-    const [time, setTime] = useState('');
+// --- MAIN APP ---
 
-    if (!isOpen) return null;
+const App: React.FC = () => {
+  // --- STATE ---
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  
+  const [currentView, setCurrentView] = useState<ViewState>('dashboard');
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
+  
+  // Data State
+  const [user, setUser] = useState<UserProfile>(INITIAL_USER);
+  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
+  const [templates, setTemplates] = useState<MessageTemplate[]>(INITIAL_TEMPLATES);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
 
-    const handleSubmit = () => {
-        if (!date || !time) return;
-        onSchedule(date, time);
-        onClose();
+  // Selection & Filter State
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState<ContactFilters>({ search: '', tag: 'all', sentiment: 'all' });
+  
+  // View Specific State (Lifted up to prevent re-render loss)
+  const [pasteText, setPasteText] = useState(''); // For Contacts Import
+  const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  // Template View State
+  const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [draftTemplate, setDraftTemplate] = useState<Partial<MessageTemplate>>({ type: 'text', variables: [], buttons: [] });
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiGenerating, setIsAiGenerating] = useState(false);
+
+  // Campaign View State
+  const [campaignStep, setCampaignStep] = useState(1);
+  const [draftCampaign, setDraftCampaign] = useState<Partial<Campaign>>({ 
+    name: '', 
+    status: 'draft',
+    audienceType: 'tag',
+    targetTags: [],
+    targetContactIds: []
+  });
+  const [wizardAiPrompt, setWizardAiPrompt] = useState('');
+  const [isWizardGenerating, setIsWizardGenerating] = useState(false);
+  const [wizardTab, setWizardTab] = useState<'select' | 'generate'>('select');
+
+  // Engine State
+  const engineRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
+
+  // --- DERIVED DATA ---
+  const getFilteredContacts = () => {
+    return contacts.filter(c => {
+      const matchesSearch = c.name.toLowerCase().includes(filters.search.toLowerCase()) || c.phone.includes(filters.search);
+      const matchesTag = filters.tag === 'all' || c.tags.includes(filters.tag);
+      const matchesSentiment = filters.sentiment === 'all' || c.sentiment === filters.sentiment;
+      return matchesSearch && matchesTag && matchesSentiment;
+    });
+  };
+  const filteredContacts = getFilteredContacts();
+  const allTags = Array.from(new Set(contacts.flatMap(c => c.tags)));
+
+  // --- LOGIN LOGIC ---
+  const handleLogin = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const u = formData.get('username') as string;
+    const p = formData.get('password') as string;
+
+    if (u === user.username && p === user.password) {
+      setIsAuthenticated(true);
+      setLoginError('');
+    } else {
+      setLoginError('Invalid username or password');
+    }
+  };
+
+  // --- ENGINE LOGIC (Realtime Injection) ---
+  useEffect(() => {
+    if (engineRef.current) clearInterval(engineRef.current);
+
+    engineRef.current = setInterval(() => {
+      // Find running campaigns
+      const runningCampaigns = campaigns.filter(c => c.status === 'running');
+      
+      if (runningCampaigns.length === 0) return;
+
+      setCampaigns(prevCampaigns => {
+        return prevCampaigns.map(campaign => {
+          if (campaign.status !== 'running') return campaign;
+
+          // Resolve Target Audience
+          let targetAudience: Contact[] = [];
+          if (campaign.audienceType === 'all') targetAudience = contacts;
+          else if (campaign.audienceType === 'tag') targetAudience = contacts.filter(c => c.tags.some(t => campaign.targetTags.includes(t)));
+          else if (campaign.audienceType === 'manual') targetAudience = contacts.filter(c => campaign.targetContactIds.includes(c.id));
+
+          const nextIndex = campaign.progress.sent + campaign.progress.failed;
+          
+          if (nextIndex >= targetAudience.length) {
+             return { ...campaign, status: 'completed' };
+          }
+
+          const contact = targetAudience[nextIndex];
+          const template = templates.find(t => t.id === campaign.templateId);
+
+          if (contact && template) {
+            // 1. Prepare Message
+            let message = fillTemplate(template.content, contact);
+            
+            // 2. Handle Image
+            // If it's a data URI (uploaded image), we try to copy to clipboard (Best effort for automation)
+            // We DO NOT append the base64 string to the message text.
+            if (template.type === 'image' && template.mediaUrl && template.mediaUrl.startsWith('data:')) {
+               const blob = dataURItoBlob(template.mediaUrl);
+               if (blob) {
+                  // NOTE: Clipboard write usually requires user interaction (click). 
+                  // In a purely automated background loop, this might be blocked by browsers.
+                  // However, for "Send Now" button clicks, it works. 
+                  // We attempt it here.
+                  try {
+                      const item = new ClipboardItem({ [blob.type]: blob });
+                      navigator.clipboard.write([item]).catch(e => console.log("Auto-copy blocked by browser policy"));
+                  } catch (e) {
+                      console.log("Clipboard API not available");
+                  }
+               }
+            } else if (template.type === 'image' && template.mediaUrl) {
+                // If it is a web link (not data:), we append it so WhatsApp shows preview
+                message += `\n\n${template.mediaUrl}`;
+            }
+
+            // 3. Attach Buttons (as text links)
+            if (template.buttons && template.buttons.length > 0) {
+                message += '\n'; // Spacer
+                template.buttons.forEach(btn => {
+                   message += `\n${btn.label}: ${btn.value}`;
+                });
+            }
+
+            const encodedMessage = encodeURIComponent(message);
+            
+            // 4. Inject to WhatsApp (Realtime Sending)
+            // Using window.open triggers the browser to open a new tab for WhatsApp Web
+            const url = `https://web.whatsapp.com/send?phone=${contact.phone.replace(/[^0-9]/g, '')}&text=${encodedMessage}`;
+            window.open(url, '_blank');
+
+            // 5. Log Result
+            const logEntry: LogEntry = {
+              id: Date.now().toString(),
+              timestamp: new Date().toISOString(),
+              campaignId: campaign.id,
+              contactName: contact.name,
+              contactPhone: contact.phone,
+              status: 'sent'
+            };
+            setLogs(prev => [logEntry, ...prev].slice(0, 200)); 
+
+            // 6. Update Progress
+            return {
+              ...campaign,
+              progress: {
+                ...campaign.progress,
+                sent: campaign.progress.sent + 1
+              }
+            };
+          }
+
+          return {
+             ...campaign,
+             progress: { ...campaign.progress, failed: campaign.progress.failed + 1 }
+          };
+        });
+      });
+
+    }, user.settings.delaySeconds * 1000);
+
+    return () => {
+      if (engineRef.current) clearInterval(engineRef.current);
     };
+  }, [campaigns, contacts, user.settings.delaySeconds, templates, user.password, user.username]);
 
+  // --- CONTACT ACTIONS ---
+
+  const handleSelectAll = () => {
+    if (selectedContactIds.size === filteredContacts.length) {
+      setSelectedContactIds(new Set());
+    } else {
+      setSelectedContactIds(new Set(filteredContacts.map(c => c.id)));
+    }
+  };
+
+  const handleSelectRandom = (count: number) => {
+    const shuffled = [...filteredContacts].sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, count).map(c => c.id);
+    setSelectedContactIds(new Set(selected));
+  };
+
+  const toggleSelection = (id: string) => {
+    setSelectedContactIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  };
+
+  const handleDeleteContacts = () => {
+    if (selectedContactIds.size === 0) return;
+    
+    // Identify contacts to delete to clean up logs
+    const contactsToDelete = contacts.filter(c => selectedContactIds.has(c.id));
+    const phonesToDelete = new Set(contactsToDelete.map(c => c.phone));
+    const idsToDelete = new Set(contactsToDelete.map(c => c.id));
+    
+    setContacts(prev => prev.filter(c => !selectedContactIds.has(c.id)));
+    
+    // Deep Clean: Remove associated logs
+    setLogs(prev => prev.filter(l => !phonesToDelete.has(l.contactPhone)));
+
+    // Deep Clean: Remove from any draft campaigns targeting these IDs specifically
+    setDraftCampaign(prev => ({
+      ...prev,
+      targetContactIds: prev.targetContactIds?.filter(id => !idsToDelete.has(id)) || []
+    }));
+    
+    setSelectedContactIds(new Set());
+  };
+
+  const handleDeleteSingleContact = (id: string) => {
+    const contactToDelete = contacts.find(c => c.id === id);
+    setContacts(prev => prev.filter(c => c.id !== id));
+    setSelectedContactIds(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(id);
+      return newSet;
+    });
+    
+    // Deep Clean: Remove associated logs
+    if (contactToDelete) {
+      setLogs(prev => prev.filter(l => l.contactPhone !== contactToDelete.phone));
+    }
+
+    // Deep Clean: Remove from draft campaign targets
+    setDraftCampaign(prev => ({
+      ...prev,
+      targetContactIds: prev.targetContactIds?.filter(cid => cid !== id) || []
+    }));
+  };
+
+  const handleDeleteLog = (logId: string) => {
+    setLogs(prev => prev.filter(l => l.id !== logId));
+  };
+
+  const handleBulkImport = (text: string) => {
+    const lines = text.split('\n');
+    const newContacts: Contact[] = lines.map((line, idx) => {
+      const parts = line.split(/[,\t;]+/); 
+      const phone = parts.length > 1 ? parts[1].trim() : parts[0].trim();
+      const name = parts.length > 1 ? parts[0].trim() : `Contact ${contacts.length + idx + 1}`;
+      
+      if (phone.length < 5) return null;
+
+      return {
+        id: `import-${Date.now()}-${idx}`,
+        name: name || 'Unknown',
+        phone: phone,
+        tags: ['imported'],
+        lastInteraction: new Date().toISOString(),
+        sentiment: 'neutral' as const
+      };
+    }).filter(Boolean) as Contact[];
+
+    setContacts(prev => [...prev, ...newContacts]);
+    setIsBulkImportOpen(false);
+    setPasteText('');
+  };
+
+  const handleAddSingleContact = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const newContact: Contact = {
+      id: `manual-${Date.now()}`,
+      name: formData.get('name') as string,
+      phone: formData.get('phone') as string,
+      tags: (formData.get('tags') as string).split(',').map(t => t.trim()).filter(Boolean),
+      lastInteraction: new Date().toISOString(),
+      sentiment: 'neutral',
+      company: formData.get('company') as string || '',
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${Date.now()}`
+    };
+    setContacts(prev => [...prev, newContact]);
+    setIsContactModalOpen(false);
+  };
+
+  // --- TEMPLATE ACTIONS ---
+  
+  const handleTemplateAI = async () => {
+    setIsAiGenerating(true);
+    const content = await generateCampaignMessage('Marketing', aiPrompt);
+    setDraftTemplate(prev => ({ ...prev, content }));
+    setIsAiGenerating(false);
+  };
+
+  const handleTemplateImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setDraftTemplate(prev => ({...prev, mediaUrl: ev.target?.result as string }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveTemplate = () => {
+    if (draftTemplate.name && draftTemplate.content) {
+      if (editingTemplateId) {
+        setTemplates(prev => prev.map(t => t.id === editingTemplateId ? { ...draftTemplate, id: editingTemplateId } as MessageTemplate : t));
+      } else {
+        setTemplates(prev => [...prev, { ...draftTemplate, id: Date.now().toString() } as MessageTemplate]);
+      }
+      setIsCreatingTemplate(false);
+      setDraftTemplate({ type: 'text', variables: [], buttons: [] });
+      setEditingTemplateId(null);
+    }
+  };
+
+  const handleCreateNewTemplate = () => {
+      setDraftTemplate({ type: 'text', variables: [], buttons: [], name: '', content: '' });
+      setEditingTemplateId(null);
+      setIsCreatingTemplate(true);
+  };
+
+  const handleEditTemplate = (t: MessageTemplate) => {
+    setDraftTemplate(t);
+    setEditingTemplateId(t.id);
+    setIsCreatingTemplate(true);
+  };
+
+  const handleDeleteTemplate = (id: string) => {
+    if (window.confirm('Are you sure you want to delete this template? It will also remove campaigns using it.')) {
+      // Remove template
+      setTemplates(prev => prev.filter(t => t.id !== id));
+      
+      // Deep Clean: Remove campaigns that used this template to prevent crashes
+      setCampaigns(prev => prev.filter(c => c.templateId !== id));
+
+      // Reset edit state if deleting current being edited
+      if (editingTemplateId === id) {
+        setIsCreatingTemplate(false);
+        setEditingTemplateId(null);
+        setDraftTemplate({ type: 'text', variables: [], buttons: [] });
+      }
+    }
+  };
+
+  // --- CAMPAIGN ACTIONS ---
+
+  const handleDeleteCampaign = (id: string) => {
+    if (window.confirm('Delete this campaign and all its tracking history (logs)?')) {
+      setCampaigns(prev => prev.filter(c => c.id !== id));
+      // Deep Clean: Remove associated logs from dashboard
+      setLogs(prev => prev.filter(l => l.campaignId !== id));
+    }
+  };
+
+  const launchCampaign = () => {
+    let total = 0;
+    if (draftCampaign.audienceType === 'all') total = contacts.length;
+    if (draftCampaign.audienceType === 'tag') total = contacts.filter(c => c.tags.some(t => draftCampaign.targetTags?.includes(t))).length;
+    if (draftCampaign.audienceType === 'manual') total = draftCampaign.targetContactIds?.length || 0;
+
+    const newCampaign: Campaign = {
+       id: Date.now().toString(),
+       name: draftCampaign.name || 'Untitled',
+       status: 'running', 
+       templateId: draftCampaign.templateId!,
+       audienceType: draftCampaign.audienceType || 'tag',
+       targetTags: draftCampaign.targetTags || [],
+       targetContactIds: draftCampaign.targetContactIds || [],
+       scheduleDate: new Date().toISOString(),
+       recurring: 'none',
+       progress: { total, sent: 0, failed: 0 },
+       createdAt: new Date().toISOString()
+    };
+    setCampaigns(prev => [newCampaign, ...prev]);
+    setCampaignStep(1);
+    setCurrentView('dashboard');
+    if (draftCampaign.audienceType === 'manual') setSelectedContactIds(new Set());
+  };
+
+  const handleWizardAiGenerate = async () => {
+    setIsWizardGenerating(true);
+    const content = await generateCampaignMessage('Promotional', wizardAiPrompt);
+    const tempTemplate: MessageTemplate = {
+        id: `ai-gen-${Date.now()}`,
+        name: `AI Generated: ${wizardAiPrompt.slice(0, 15)}...`,
+        content: content,
+        type: 'text',
+        variables: ['name']
+    };
+    setTemplates(prev => [tempTemplate, ...prev]);
+    setDraftCampaign(prev => ({ ...prev, templateId: tempTemplate.id }));
+    setIsWizardGenerating(false);
+    setWizardAiPrompt('');
+    setCampaignStep(3);
+  };
+
+  // --- DATA MIGRATION ---
+
+  const handleBackup = () => {
+    const data = { version: '1.0', timestamp: new Date().toISOString(), user, contacts, templates, campaigns, logs };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `whatsapp-manager-backup-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.contacts) setContacts(data.contacts);
+        if (data.templates) setTemplates(data.templates);
+        if (data.campaigns) setCampaigns(data.campaigns);
+        if (data.user) setUser(data.user);
+        alert('Data restored successfully!');
+      } catch (err) {
+        alert('Failed to restore data. Invalid JSON file.');
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // --- QUICK BLAST ---
+  const handleQuickSend = (qText: string, qMsg: string) => {
+      const lines = qText.split('\n').filter(l => l.trim().length > 5);
+      if (lines.length === 0 || !qMsg) return;
+
+      const tempIds: string[] = [];
+      const tempContacts: Contact[] = lines.map((line, idx) => {
+        const id = `quick-${Date.now()}-${idx}`;
+        tempIds.push(id);
+        return {
+           id,
+           name: `Quick Contact ${idx+1}`,
+           phone: line.trim(),
+           tags: ['quick-blast'],
+           lastInteraction: new Date().toISOString()
+        };
+      });
+
+      const tempTemplate: MessageTemplate = {
+         id: `temp-tpl-${Date.now()}`,
+         name: 'Quick Blast',
+         content: qMsg,
+         type: 'text',
+         variables: []
+      };
+
+      setContacts(prev => [...prev, ...tempContacts]);
+      setTemplates(prev => [...prev, tempTemplate]);
+      
+      const campaign: Campaign = {
+        id: `quick-camp-${Date.now()}`,
+        name: `Quick Send (${new Date().toLocaleTimeString()})`,
+        status: 'running',
+        templateId: tempTemplate.id,
+        audienceType: 'manual',
+        targetTags: [],
+        targetContactIds: tempIds,
+        createdAt: new Date().toISOString(),
+        progress: { total: tempIds.length, sent: 0, failed: 0 }
+      };
+
+      setCampaigns(prev => [campaign, ...prev]);
+      alert(`Started background sending engine for ${tempIds.length} numbers. Windows will open automatically every ${user.settings.delaySeconds} seconds.`);
+  };
+
+  const QuickPasteModal = () => {
+    const [qText, setQText] = useState('');
+    const [qMsg, setQMsg] = useState('');
     return (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full overflow-hidden border border-slate-100">
-                <div className="p-6">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                            <Calendar className="w-5 h-5 text-emerald-600" />
-                            Schedule Campaign
-                        </h3>
-                        <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-                            <X className="w-5 h-5" />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
+         <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><FastForward className="w-4 h-4 text-emerald-600"/> Quick Blast (Bulk Auto-Send)</h3>
+         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <textarea 
+              className="p-3 border rounded-lg text-sm h-32 font-mono resize-none focus:ring-2 focus:ring-emerald-500/20 outline-none" 
+              placeholder="Paste numbers here (one per line)..."
+              value={qText}
+              onChange={e => setQText(e.target.value)}
+            />
+            <div className="flex flex-col gap-2 h-32">
+              <textarea 
+                className="p-3 border rounded-lg text-sm flex-1 resize-none focus:ring-2 focus:ring-emerald-500/20 outline-none" 
+                placeholder="Type your message here..."
+                value={qMsg}
+                onChange={e => setQMsg(e.target.value)}
+              />
+              <button onClick={() => { handleQuickSend(qText, qMsg); setQText(''); setQMsg(''); }} disabled={!qText || !qMsg} className="bg-emerald-600 text-white py-2 rounded-lg font-bold hover:bg-emerald-700 disabled:opacity-50">
+                 Start Bulk Sending
+              </button>
+            </div>
+         </div>
+      </div>
+    );
+  };
+
+  const SidebarItem = ({ view, icon: Icon, label }: { view: ViewState, icon: any, label: string }) => (
+    <button 
+      onClick={() => setCurrentView(view)}
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${currentView === view ? 'bg-emerald-50 text-emerald-700 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}
+    >
+      <Icon className="w-5 h-5" />
+      {isSidebarOpen && <span>{label}</span>}
+    </button>
+  );
+
+  // --- RENDER ---
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md animate-in zoom-in duration-300">
+           <div className="flex justify-center mb-6">
+              <div className="w-12 h-12 bg-emerald-600 rounded-xl flex items-center justify-center text-white">
+                 <MessageSquare className="w-7 h-7" />
+              </div>
+           </div>
+           <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">WhatsApp Manager V3</h2>
+           <p className="text-center text-slate-500 text-sm mb-6">Enter your credentials to continue</p>
+           <form onSubmit={handleLogin} className="space-y-4">
+              <FormInput label="Username" name="username" defaultValue="admin" required />
+              <FormInput label="Password" name="password" type="password" defaultValue="123" required />
+              {loginError && <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded">{loginError}</div>}
+              <button className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-lg shadow-emerald-500/20 transition-all">
+                 Login
+              </button>
+              <div className="text-center text-xs text-slate-400 mt-4">
+                 Default: admin / 123
+              </div>
+           </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
+      {/* Sidebar */}
+      <div className={`${isSidebarOpen ? 'w-64' : 'w-20'} bg-white border-r border-slate-200 transition-all duration-300 flex flex-col z-20`}>
+        <div className="p-6 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-emerald-600 font-bold text-xl overflow-hidden whitespace-nowrap">
+            <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white flex-shrink-0">
+              <MessageSquare className="w-5 h-5" />
+            </div>
+            {isSidebarOpen && <span>AutoWApp</span>}
+          </div>
+          <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-1 hover:bg-slate-100 rounded-md lg:hidden">
+            <Menu className="w-5 h-5" />
+          </button>
+        </div>
+        <nav className="flex-1 px-4 space-y-2 mt-4">
+          <SidebarItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
+          <SidebarItem view="contacts" icon={Users} label="Contacts" />
+          <SidebarItem view="templates" icon={FileText} label="Templates" />
+          <SidebarItem view="campaigns" icon={Send} label="Campaigns" />
+        </nav>
+        {isSidebarOpen && (
+          <div className="px-6 py-4 space-y-2">
+             <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <h5 className="text-xs font-bold text-slate-500 uppercase mb-3">Backup Data</h5>
+                <button onClick={handleBackup} className="w-full py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium hover:bg-slate-100 flex items-center justify-center gap-1 mb-2">
+                   <Download className="w-3 h-3"/> Download JSON
+                </button>
+                <div className="relative">
+                   <button className="w-full py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium hover:bg-slate-100 flex items-center justify-center gap-1">
+                      <Upload className="w-3 h-3"/> Restore JSON
+                   </button>
+                   <input type="file" ref={fileInputRef} onChange={handleRestore} className="absolute inset-0 opacity-0 cursor-pointer" accept=".json"/>
+                </div>
+             </div>
+          </div>
+        )}
+        <div className="p-4 border-t border-slate-100">
+           <button onClick={() => setIsAuthenticated(false)} className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 rounded-lg mt-1">
+             <LogOut className="w-5 h-5" />
+             {isSidebarOpen && <span>Logout</span>}
+           </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 overflow-auto flex flex-col">
+        <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+          <h1 className="text-2xl font-bold text-slate-800 capitalize">{currentView}</h1>
+          <div className="flex items-center gap-4">
+             {campaigns.some(c => c.status === 'running') && (
+                <div className="hidden md:flex items-center gap-2 text-xs font-medium bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-100">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                  Sending Active
+                </div>
+             )}
+            <button onClick={() => setIsProfileModalOpen(true)} className="w-10 h-10 bg-slate-200 rounded-full overflow-hidden border-2 border-white shadow-sm hover:ring-2 ring-emerald-500 transition-all">
+               <img src={user.avatar} alt="User" className="w-full h-full object-cover"/>
+            </button>
+          </div>
+        </header>
+
+        <main className="p-8 flex-1 max-w-7xl mx-auto w-full">
+          {currentView === 'dashboard' && (
+            <div className="space-y-6 animate-in fade-in duration-500">
+               <QuickPasteModal />
+               
+               {/* Active Campaigns Widget */}
+               {campaigns.some(c => c.status === 'running') && (
+                  <div className="mb-6 bg-emerald-50 border border-emerald-100 rounded-xl p-4 animate-in fade-in slide-in-from-top-4">
+                      <h3 className="font-bold text-emerald-800 mb-3 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> Active Campaigns</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {campaigns.filter(c => c.status === 'running').map(c => {
+                               const total = c.progress.total;
+                               const sent = c.progress.sent;
+                               const failed = c.progress.failed;
+                               const sentPercent = total > 0 ? (sent / total) * 100 : 0;
+                               return (
+                                  <div key={c.id} className="bg-white p-3 rounded-lg border border-emerald-200 shadow-sm">
+                                      <div className="flex justify-between mb-2">
+                                           <span className="font-medium text-slate-700 truncate">{c.name}</span>
+                                           <span className="text-xs font-bold text-emerald-600">{Math.round(sentPercent)}%</span>
+                                      </div>
+                                      <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                           <div className="bg-emerald-500 h-full transition-all duration-300" style={{ width: `${sentPercent}%` }} />
+                                      </div>
+                                       <div className="flex justify-between mt-1 text-[10px] text-slate-500">
+                                          <span>{sent} sent</span>
+                                          <span>{total - sent - failed} left</span>
+                                      </div>
+                                  </div>
+                               )
+                          })}
+                      </div>
+                  </div>
+               )}
+
+               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10"><Play className="w-16 h-16 text-emerald-600"/></div>
+                  <p className="text-slate-500 text-sm font-medium">Running Campaigns</p>
+                  <h3 className="text-3xl font-bold text-slate-800 mt-1">{campaigns.filter(c => c.status === 'running').length}</h3>
+                </div>
+                <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10"><MessageSquare className="w-16 h-16 text-blue-600"/></div>
+                  <p className="text-slate-500 text-sm font-medium">Delivered Today</p>
+                  <h3 className="text-3xl font-bold text-blue-600 mt-1">{logs.filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString() && l.status === 'sent').length}</h3>
+                </div>
+                <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10"><Users className="w-16 h-16 text-purple-600"/></div>
+                  <p className="text-slate-500 text-sm font-medium">Total Contacts</p>
+                  <h3 className="text-3xl font-bold text-slate-800 mt-1">{contacts.length}</h3>
+                </div>
+                <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10"><Settings className="w-16 h-16 text-slate-600"/></div>
+                  <p className="text-slate-500 text-sm font-medium">Speed Setting</p>
+                  <h3 className="text-3xl font-bold text-slate-800 mt-1">{user.settings.delaySeconds}s</h3>
+                  <p className="text-xs text-slate-400 mt-1">Delay per message</p>
+                </div>
+               </div>
+
+               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
+                  <DashboardChart data={[
+                    { name: '09:00', sent: 40, replies: 10 },
+                    { name: '10:00', sent: 130, replies: 20 },
+                    { name: '11:00', sent: 70, replies: 12 },
+                    { name: '12:00', sent: 45, replies: 5 },
+                    { name: '13:00', sent: 90, replies: 30 },
+                  ]} />
+                </div>
+                <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 overflow-hidden flex flex-col h-[400px]">
+                  <div className="flex justify-between items-center mb-4">
+                     <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 text-emerald-600" /> Live Delivery Log
+                     </h3>
+                     {logs.length > 0 && (
+                        <button onClick={() => setLogs([])} className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1">
+                           <Trash2 className="w-3 h-3"/> Clear Logs
                         </button>
+                     )}
+                  </div>
+                  <div className="space-y-3 overflow-y-auto pr-2 flex-1">
+                    {logs.length === 0 && <div className="text-center text-slate-400 mt-10">Waiting for campaigns...</div>}
+                    {logs.map(log => (
+                      <div key={log.id} className="flex items-center justify-between text-sm p-3 rounded-lg bg-slate-50 border border-slate-100 transition-all hover:bg-slate-100 group">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-slate-700">{log.contactName}</span>
+                          <span className="text-xs text-slate-400">{log.contactPhone}</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-end">
+                                <StatusBadge status={log.status} />
+                                <span className="text-[10px] text-slate-400 mt-1">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                            <button onClick={() => handleDeleteLog(log.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                                <X className="w-4 h-4"/>
+                            </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+               </div>
+            </div>
+          )}
+
+          {currentView === 'contacts' && (
+             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in h-full flex flex-col">
+               <div className="p-4 border-b border-slate-100 space-y-4">
+                 <div className="flex flex-wrap gap-4 justify-between items-center">
+                    <div className="flex items-center gap-2">
+                       <div className="relative w-64">
+                         <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                         <input 
+                           type="text" 
+                           placeholder="Search by name or phone..." 
+                           className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                           value={filters.search}
+                           onChange={(e) => setFilters({...filters, search: e.target.value})}
+                         />
+                       </div>
+                       <select 
+                          className="px-3 py-2 border rounded-lg bg-slate-50 text-sm focus:outline-none"
+                          value={filters.tag}
+                          onChange={(e) => setFilters({...filters, tag: e.target.value})}
+                       >
+                          <option value="all">All Tags</option>
+                          {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+                       </select>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setIsBulkImportOpen(true)} className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm">
+                        <UploadCloud className="w-4 h-4" /> Import / Paste
+                      </button>
+                      <button onClick={() => setIsContactModalOpen(true)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm">
+                        <Plus className="w-4 h-4" /> New
+                      </button>
+                    </div>
+                 </div>
+                 
+                 <div className="flex flex-wrap gap-2 items-center text-sm py-2 bg-slate-50 px-4 rounded-lg border border-slate-100">
+                    <span className="font-medium text-slate-600 mr-2">{selectedContactIds.size} Selected</span>
+                    <div className="h-4 w-px bg-slate-300 mx-2"></div>
+                    <button onClick={handleSelectAll} className="hover:text-emerald-600">
+                       {selectedContactIds.size === filteredContacts.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                    <button onClick={() => handleSelectRandom(10)} className="hover:text-emerald-600">Random 10</button>
+                    <button onClick={() => handleSelectRandom(50)} className="hover:text-emerald-600">Random 50</button>
+                    {selectedContactIds.size > 0 && (
+                      <>
+                        <div className="h-4 w-px bg-slate-300 mx-2"></div>
+                        <button onClick={handleDeleteContacts} className="text-red-500 hover:text-red-700 flex items-center gap-1">
+                           <Trash2 className="w-3 h-3"/> Remove Selected
+                        </button>
+                        <button onClick={() => {
+                          setDraftCampaign(prev => ({ ...prev, audienceType: 'manual', targetContactIds: Array.from(selectedContactIds) }));
+                          setCampaignStep(1);
+                          setCurrentView('campaigns');
+                        }} className="text-emerald-600 hover:text-emerald-800 font-bold flex items-center gap-1 ml-auto">
+                           Create Campaign <FastForward className="w-3 h-3"/>
+                        </button>
+                      </>
+                    )}
+                 </div>
+               </div>
+
+               <div className="overflow-auto flex-1">
+                 <table className="w-full text-left">
+                   <thead className="bg-slate-50 text-slate-600 text-sm font-medium sticky top-0 z-10">
+                     <tr>
+                       <th className="px-6 py-3 w-10">
+                         <input 
+                           type="checkbox" 
+                           checked={selectedContactIds.size === filteredContacts.length && filteredContacts.length > 0}
+                           onChange={handleSelectAll}
+                           className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" 
+                         />
+                       </th>
+                       <th className="px-6 py-3">Name</th>
+                       <th className="px-6 py-3">Phone</th>
+                       <th className="px-6 py-3">Tags</th>
+                       <th className="px-6 py-3">Status</th>
+                       <th className="px-6 py-3">Action</th>
+                     </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-100">
+                     {filteredContacts.map(contact => (
+                       <tr key={contact.id} className={`hover:bg-slate-50 ${selectedContactIds.has(contact.id) ? 'bg-emerald-50/50' : ''}`}>
+                         <td className="px-6 py-4">
+                           <input 
+                             type="checkbox" 
+                             checked={selectedContactIds.has(contact.id)}
+                             onChange={() => toggleSelection(contact.id)}
+                             className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" 
+                           />
+                         </td>
+                         <td className="px-6 py-4 font-medium text-slate-900 flex items-center gap-2">
+                           <img src={contact.avatar} alt="" className="w-6 h-6 rounded-full bg-slate-200" />
+                           {contact.name}
+                         </td>
+                         <td className="px-6 py-4 text-slate-600 font-mono text-xs">{contact.phone}</td>
+                         <td className="px-6 py-4">
+                           <div className="flex gap-1">
+                             {contact.tags.map(t => <span key={t} className="px-2 py-0.5 bg-white border border-slate-200 text-slate-600 rounded text-[10px] uppercase tracking-wider">{t}</span>)}
+                           </div>
+                         </td>
+                         <td className="px-6 py-4">
+                           <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${contact.sentiment === 'positive' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
+                             {contact.sentiment}
+                           </span>
+                         </td>
+                         <td className="px-6 py-4 flex items-center gap-2">
+                            <a href={`https://wa.me/${contact.phone.replace(/[^0-9]/g, '')}`} target="_blank" rel="noreferrer" className="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded-md inline-block">
+                               <Send className="w-4 h-4" />
+                            </a>
+                            <button onClick={() => handleDeleteSingleContact(contact.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded-md" title="Remove Contact">
+                               <Trash2 className="w-4 h-4" />
+                            </button>
+                         </td>
+                       </tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
+               
+               {/* Inline Modals for Contacts */}
+               {isBulkImportOpen && (
+                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                   <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 animate-in zoom-in-95 duration-200">
+                      <div className="flex justify-between items-center mb-4">
+                         <h3 className="text-xl font-bold">Bulk Import Contacts</h3>
+                         <button onClick={() => setIsBulkImportOpen(false)}><X className="w-5 h-5 text-slate-400 hover:text-slate-600"/></button>
+                      </div>
+                      <p className="text-sm text-slate-500 mb-4">Paste contacts (Name, Phone) or just Numbers. One per line.</p>
+                      <textarea 
+                         className="w-full h-48 p-3 border rounded-lg font-mono text-sm mb-4 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                         placeholder={"John Doe, +123456789\nJane Smith, +987654321\n+1122334455"}
+                         value={pasteText}
+                         onChange={(e) => setPasteText(e.target.value)}
+                      />
+                      <div className="flex justify-end gap-3">
+                         <button onClick={() => setIsBulkImportOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                         <button onClick={() => handleBulkImport(pasteText)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold">Import Contacts</button>
+                      </div>
+                   </div>
+                 </div>
+               )}
+
+               {isContactModalOpen && (
+                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                   <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200">
+                      <div className="flex justify-between items-center mb-4">
+                         <h3 className="text-xl font-bold">Add New Contact</h3>
+                         <button onClick={() => setIsContactModalOpen(false)}><X className="w-5 h-5 text-slate-400 hover:text-slate-600"/></button>
+                      </div>
+                      <form onSubmit={handleAddSingleContact} className="space-y-4">
+                         <FormInput label="Name" name="name" required placeholder="Jane Doe" />
+                         <FormInput label="Phone Number" name="phone" required placeholder="+123456789" />
+                         <FormInput label="Company" name="company" placeholder="Business Name (Optional)" />
+                         <FormInput label="Tags" name="tags" placeholder="vip, new lead (comma separated)" />
+                         <div className="flex justify-end gap-3 mt-6">
+                           <button type="button" onClick={() => setIsContactModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                           <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold">Add Contact</button>
+                         </div>
+                      </form>
+                   </div>
+                 </div>
+               )}
+             </div>
+          )}
+
+          {currentView === 'templates' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in">
+              <div className="lg:col-span-1 space-y-4">
+                <button onClick={handleCreateNewTemplate} className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2">
+                  <Plus className="w-5 h-5" /> Create New Template
+                </button>
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                   <div className="p-3 bg-slate-50 border-b border-slate-200 font-bold text-slate-700">My Templates</div>
+                   <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
+                     {templates.map(t => (
+                       <div key={t.id} className="p-4 hover:bg-slate-50 cursor-pointer group relative">
+                          <div className="flex justify-between items-start">
+                             <h4 className="font-bold text-slate-800">{t.name}</h4>
+                             <div className="flex items-center gap-1">
+                               {t.type === 'image' && <ImageIcon className="w-4 h-4 text-purple-500" />}
+                               <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={(e) => { e.stopPropagation(); handleEditTemplate(t); }} className="p-1 text-blue-500 hover:bg-blue-50 rounded"><Edit className="w-3 h-3"/></button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(t.id); }} className="p-1 text-red-500 hover:bg-red-50 rounded"><Trash2 className="w-3 h-3"/></button>
+                               </div>
+                             </div>
+                          </div>
+                          <p className="text-xs text-slate-500 line-clamp-2 mt-1">{t.content}</p>
+                       </div>
+                     ))}
+                   </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-2">
+                {isCreatingTemplate ? (
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                    <h3 className="font-bold text-xl mb-6">{editingTemplateId ? 'Edit Template' : 'Create Template'}</h3>
+                    <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 mb-6">
+                       <div className="flex gap-2">
+                         <input className="flex-1 px-3 py-2 rounded-lg border border-purple-200" placeholder="Ask AI to write your message..." value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} />
+                         <button onClick={handleTemplateAI} disabled={isAiGenerating} className="px-4 py-2 bg-purple-600 text-white rounded-lg">{isAiGenerating ? <Loader2 className="animate-spin"/> : 'Generate'}</button>
+                       </div>
                     </div>
 
                     <div className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
-                            <input 
-                                type="date" 
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                                value={date}
-                                onChange={(e) => setDate(e.target.value)}
-                                min={new Date().toISOString().split('T')[0]}
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Time</label>
-                            <input 
-                                type="time" 
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                                value={time}
-                                onChange={(e) => setTime(e.target.value)}
-                            />
-                        </div>
-                        <div className="bg-blue-50 text-blue-800 p-3 rounded-lg text-xs flex gap-2">
-                             <Clock className="w-4 h-4 mt-0.5 shrink-0" />
-                             <p>This will save the campaign. When the time comes, you will receive a notification to start sending.</p>
-                        </div>
-                    </div>
-
-                    <div className="mt-6 flex gap-3">
-                        <button onClick={onClose} className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium">
-                            Cancel
-                        </button>
-                        <button 
-                            onClick={handleSubmit}
-                            disabled={!date || !time}
-                            className="flex-1 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium disabled:opacity-50"
-                        >
-                            Confirm Schedule
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-interface ContactDetailsModalProps {
-  isOpen: boolean;
-  contact: Contact | null;
-  onClose: () => void;
-  onSave: (contact: Contact) => void;
-}
-
-const ContactDetailsModal: React.FC<ContactDetailsModalProps> = ({ isOpen, contact, onClose, onSave }) => {
-    const [form, setForm] = useState<Contact | null>(null);
-
-    useEffect(() => {
-        if (contact) {
-            setForm({ ...contact });
-        }
-    }, [contact]);
-
-    if (!isOpen || !form) return null;
-
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setForm(prev => prev ? ({ ...prev, avatar: reader.result as string }) : null);
-            };
-            reader.readAsDataURL(file);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-end animate-in fade-in duration-200">
-            <div className="h-full w-full max-w-md bg-white shadow-2xl animate-in slide-in-from-right duration-300 p-6 flex flex-col overflow-y-auto">
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-bold text-slate-800">Contact Details</h2>
-                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                        <X className="w-5 h-5 text-slate-500" />
-                    </button>
-                </div>
-
-                <div className="flex flex-col items-center mb-6">
-                    <div className="relative group cursor-pointer mb-3">
-                        <div className="w-24 h-24 rounded-full bg-slate-200 overflow-hidden border-4 border-slate-50 shadow-md">
-                            {form.avatar ? (
-                                <img src={form.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center bg-emerald-100 text-emerald-600 font-bold text-3xl">
-                                    {form.name.charAt(0)}
-                                </div>
-                            )}
-                        </div>
-                        <label className="absolute bottom-0 right-0 bg-white border border-slate-200 rounded-full p-2 shadow-sm cursor-pointer hover:bg-slate-50">
-                            <Camera className="w-4 h-4 text-slate-600" />
-                            <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
-                        </label>
-                    </div>
-                </div>
-
-                <div className="space-y-4 flex-1">
-                    <FormInput 
-                        label="Full Name"
-                        value={form.name}
-                        onChange={(e) => setForm(prev => prev ? ({...prev, name: e.target.value}) : null)}
-                    />
-                    <FormInput 
-                        label="Phone Number"
-                        value={form.phone}
-                        onChange={(e) => setForm(prev => prev ? ({...prev, phone: e.target.value}) : null)}
-                    />
-                    <FormInput 
-                        label="Company"
-                        value={form.company || ''}
-                        onChange={(e) => setForm(prev => prev ? ({...prev, company: e.target.value}) : null)}
-                    />
-                    <FormInput 
-                        label="Tags (comma separated)"
-                        value={form.tags.join(', ')}
-                        onChange={(e) => setForm(prev => prev ? ({...prev, tags: e.target.value.split(',').map(t => t.trim())}) : null)}
-                    />
-
-                    <div className="grid grid-cols-2 gap-4 mt-6">
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                            <p className="text-xs text-slate-500 mb-1">Last Interaction</p>
-                            <p className="font-medium text-slate-700">{form.lastInteraction}</p>
-                        </div>
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                            <p className="text-xs text-slate-500 mb-1">Sentiment</p>
-                            <p className="font-medium text-slate-700 capitalize">{form.sentiment || 'Neutral'}</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="mt-8 flex gap-3">
-                    <button onClick={onClose} className="flex-1 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">
-                        Cancel
-                    </button>
-                    <button 
-                        onClick={() => onSave(form)}
-                        className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200"
-                    >
-                        Save Changes
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-interface AddContactModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onAddSingle: (contact: Partial<Contact>) => void;
-  onAddBulk: (text: string) => void;
-}
-
-const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAddSingle, onAddBulk }) => {
-  const [addContactMode, setAddContactMode] = useState<'single' | 'bulk'>('single');
-  const [newContactForm, setNewContactForm] = useState({ name: '', phone: '', company: '', tags: '', avatar: '' });
-  const [bulkContactText, setBulkContactText] = useState('');
-
-  // Reset form when modal opens
-  useEffect(() => {
-    if (isOpen) {
-        setNewContactForm({ name: '', phone: '', company: '', tags: '', avatar: '' });
-        setBulkContactText('');
-        setAddContactMode('single');
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setNewContactForm(prev => ({ ...prev, avatar: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSubmit = () => {
-    if (addContactMode === 'single') {
-        onAddSingle({
-            ...newContactForm,
-            tags: newContactForm.tags.split(',').map(tag => tag.trim()).filter(Boolean)
-        });
-    } else {
-        onAddBulk(bulkContactText);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden border border-slate-100">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-xl font-bold text-slate-800">Add New Contacts</h3>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Tabs */}
-          <div className="flex bg-slate-100 rounded-lg p-1 mb-6">
-              <button 
-                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${addContactMode === 'single' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                  onClick={() => setAddContactMode('single')}
-              >
-                  <UserPlus className="w-4 h-4" /> Single
-              </button>
-              <button 
-                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${addContactMode === 'bulk' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                  onClick={() => setAddContactMode('bulk')}
-              >
-                  <FileText className="w-4 h-4" /> Bulk Import
-              </button>
-          </div>
-
-          {addContactMode === 'single' ? (
-              <div className="space-y-4">
-                {/* Image Upload */}
-                <div className="flex items-center gap-4 mb-2">
-                  <div className="w-16 h-16 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0 flex items-center justify-center">
-                      {newContactForm.avatar ? (
-                          <img src={newContactForm.avatar} alt="Preview" className="w-full h-full object-cover" />
-                      ) : (
-                          <Users className="w-6 h-6 text-slate-300" />
-                      )}
-                  </div>
-                  <div className="flex-1">
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Profile Photo</label>
-                      <label className="cursor-pointer inline-flex items-center gap-2 text-xs bg-white border border-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors text-slate-600">
-                          <Upload className="w-3 h-3" /> Upload Image
-                          <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
-                      </label>
-                  </div>
-                </div>
-
-                <FormInput 
-                  label="Full Name"
-                  placeholder="e.g. John Doe"
-                  value={newContactForm.name}
-                  onChange={(e) => setNewContactForm(prev => ({...prev, name: e.target.value}))}
-                />
-                <FormInput 
-                  label="Phone Number"
-                  placeholder="e.g. 15551234567"
-                  type="tel"
-                  value={newContactForm.phone}
-                  onChange={(e) => setNewContactForm(prev => ({...prev, phone: e.target.value}))}
-                />
-                <FormInput 
-                  label="Company Name"
-                  placeholder="e.g. Acme Corp"
-                  value={newContactForm.company}
-                  onChange={(e) => setNewContactForm(prev => ({...prev, company: e.target.value}))}
-                />
-                 <FormInput 
-                  label="Tags (comma separated)"
-                  placeholder="e.g. vip, new, lead"
-                  value={newContactForm.tags}
-                  onChange={(e) => setNewContactForm(prev => ({...prev, tags: e.target.value}))}
-                />
-              </div>
-          ) : (
-              <div className="space-y-4">
-                  <div className="bg-amber-50 text-amber-800 text-xs p-3 rounded-lg flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 mt-0.5" />
-                      <div className="space-y-1">
-                          <p><strong>Paste list from Excel or Text.</strong></p>
-                          <p>Format: Name Phone OR Phone Name</p>
+                      <FormInput label="Template Name" value={draftTemplate.name || ''} onChange={e => setDraftTemplate({...draftTemplate, name: e.target.value})} />
+                      <div className="flex gap-4 mb-2">
+                         <label className="flex items-center gap-2">
+                            <input type="radio" name="type" checked={draftTemplate.type === 'text' || !draftTemplate.type} onChange={() => setDraftTemplate({...draftTemplate, type: 'text'})} /> Text
+                         </label>
+                         <label className="flex items-center gap-2">
+                            <input type="radio" name="type" checked={draftTemplate.type === 'image'} onChange={() => setDraftTemplate({...draftTemplate, type: 'image'})} /> Image + Caption
+                         </label>
                       </div>
+
+                      {draftTemplate.type === 'image' && (
+                        <div className="space-y-2">
+                          {/* Replaced URL Input with dedicated Upload UI */}
+                          <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors" onClick={() => imgInputRef.current?.click()}>
+                              {draftTemplate.mediaUrl ? (
+                                <div className="relative w-full h-48">
+                                    <img src={draftTemplate.mediaUrl} alt="Preview" className="w-full h-full object-contain rounded-md" />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity rounded-md">
+                                        <span className="text-white font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4"/> Change Image</span>
+                                    </div>
+                                </div>
+                              ) : (
+                                <>
+                                    <ImageIcon className="w-12 h-12 text-slate-300 mb-2" />
+                                    <p className="text-sm text-slate-500 font-medium">Click to upload image</p>
+                                    <p className="text-xs text-slate-400">Supports JPG, PNG (Max 5MB)</p>
+                                </>
+                              )}
+                              <input type="file" ref={imgInputRef} onChange={handleTemplateImageUpload} className="hidden" accept="image/*"/>
+                          </div>
+                        </div>
+                      )}
+
+                      <FormTextArea label="Message Content" value={draftTemplate.content || ''} onChange={e => setDraftTemplate({...draftTemplate, content: e.target.value})} className="h-32" />
+                      
+                      {/* --- BUTTONS SECTION --- */}
+                      <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                        <label className="text-sm font-medium text-slate-700 mb-2 block flex items-center gap-2">
+                           <LinkIcon className="w-4 h-4"/> Action Buttons (Appended Links)
+                        </label>
+                        <div className="flex gap-2 mb-3">
+                           <button 
+                             onClick={() => setDraftTemplate(prev => ({...prev, buttons: [...(prev.buttons || []), { type: 'url', label: 'Visit Website', value: 'https://' }] }))} 
+                             className="px-3 py-1 bg-white border border-slate-200 rounded text-xs font-medium hover:text-emerald-600 flex items-center gap-1">
+                             <Plus className="w-3 h-3"/> Add Website
+                           </button>
+                           <button 
+                             onClick={() => setDraftTemplate(prev => ({...prev, buttons: [...(prev.buttons || []), { type: 'location', label: 'View Location', value: 'https://maps.google.com' }] }))}
+                             className="px-3 py-1 bg-white border border-slate-200 rounded text-xs font-medium hover:text-emerald-600 flex items-center gap-1">
+                             <Plus className="w-3 h-3"/> Add Location
+                           </button>
+                        </div>
+                        <div className="space-y-2">
+                          {draftTemplate.buttons?.map((btn, idx) => (
+                             <div key={idx} className="flex gap-2 items-start">
+                                <div className="grid grid-cols-2 gap-2 flex-1">
+                                  <input 
+                                    className="px-2 py-1 text-sm border rounded bg-white" 
+                                    placeholder="Label (e.g. Visit Shop)" 
+                                    value={btn.label}
+                                    onChange={(e) => {
+                                       const newBtns = [...(draftTemplate.buttons || [])];
+                                       newBtns[idx].label = e.target.value;
+                                       setDraftTemplate({...draftTemplate, buttons: newBtns});
+                                    }}
+                                  />
+                                  <input 
+                                    className="px-2 py-1 text-sm border rounded bg-white" 
+                                    placeholder="URL (https://...)" 
+                                    value={btn.value}
+                                    onChange={(e) => {
+                                       const newBtns = [...(draftTemplate.buttons || [])];
+                                       newBtns[idx].value = e.target.value;
+                                       setDraftTemplate({...draftTemplate, buttons: newBtns});
+                                    }}
+                                  />
+                                </div>
+                                <button 
+                                  onClick={() => setDraftTemplate(prev => ({...prev, buttons: prev.buttons?.filter((_, i) => i !== idx)}))}
+                                  className="p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                >
+                                   <Trash2 className="w-4 h-4"/>
+                                </button>
+                             </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 p-4 bg-slate-50 border rounded-lg">
+                        <h5 className="font-bold text-xs text-slate-500 uppercase mb-2 flex items-center gap-1"><Sparkles className="w-3 h-3 text-purple-500"/> Live Preview (with {contacts[0]?.name || 'Sample'})</h5>
+                        <div className="text-sm bg-white p-3 rounded border border-slate-200 whitespace-pre-wrap text-slate-800">
+                           {draftTemplate.content ? fillTemplate(draftTemplate.content, contacts[0] || {} as Contact) : <span className="text-slate-400 italic">Start typing or generate content to see preview...</span>}
+                           {/* Only show "Image Attached" text in preview if it's a data URL, otherwise show link */}
+                           {draftTemplate.type === 'image' && draftTemplate.mediaUrl && (
+                               <div className="mt-2 text-xs text-blue-500 underline">
+                                  {draftTemplate.mediaUrl.startsWith('data:') ? '[Image Attached]' : draftTemplate.mediaUrl}
+                               </div>
+                           )}
+                           {draftTemplate.buttons?.map((b, i) => (
+                              <div key={i} className="mt-2 text-blue-600 underline font-medium block">
+                                 {b.label}: {b.value}
+                              </div>
+                           ))}
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-3 pt-6">
+                        <button onClick={() => { setIsCreatingTemplate(false); setDraftTemplate({ type: 'text', variables: [], buttons: [] }); setEditingTemplateId(null); }} className="px-6 py-2 text-slate-600 hover:bg-slate-50 rounded-lg font-medium">Cancel</button>
+                        <button onClick={saveTemplate} className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-bold">Save Template</button>
+                      </div>
+                    </div>
                   </div>
-                  <FormTextArea 
-                      label="Paste Data Here"
-                      placeholder="John Doe 15551234567"
-                      rows={8}
-                      value={bulkContactText}
-                      onChange={(e) => setBulkContactText(e.target.value)}
-                  />
+                ) : (
+                   <div className="flex flex-col items-center justify-center h-[400px] bg-white rounded-xl border border-slate-200 border-dashed text-slate-400">
+                      <FileText className="w-16 h-16 mb-4 opacity-50" />
+                      <p>Select a template to view or create a new one.</p>
+                   </div>
+                )}
               </div>
+            </div>
           )}
 
-          <div className="mt-6 flex gap-3">
-            <button onClick={onClose} className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium">
-              Cancel
-            </button>
-            <button 
-              onClick={handleSubmit}
-              disabled={addContactMode === 'single' ? (!newContactForm.name || !newContactForm.phone) : !bulkContactText}
-              className="flex-1 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {addContactMode === 'single' ? 'Save Contact' : 'Import Contacts'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+          {currentView === 'campaigns' && (
+             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in">
+               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden h-fit">
+                  <div className="p-4 border-b border-slate-100 font-bold text-slate-800">Your Campaigns</div>
+                  <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
+                     {campaigns.map(c => {
+                       const total = c.progress.total;
+                       const sent = c.progress.sent;
+                       const failed = c.progress.failed;
+                       const pending = total - sent - failed;
+                       
+                       const sentPercent = total > 0 ? (sent / total) * 100 : 0;
+                       const failedPercent = total > 0 ? (failed / total) * 100 : 0;
+                       
+                       return (
+                         <div key={c.id} className="p-4 hover:bg-slate-50 group border rounded-xl mb-3 border-slate-100 bg-white shadow-sm m-2">
+                             <div className="flex justify-between items-start mb-3">
+                                 <div>
+                                     <h4 className="font-bold text-slate-800 text-sm">{c.name}</h4>
+                                     <span className="text-xs text-slate-400">Created: {new Date(c.createdAt).toLocaleDateString()}</span>
+                                 </div>
+                                 <div className="flex items-center gap-2">
+                                     <StatusBadge status={c.status} />
+                                     <button onClick={() => handleDeleteCampaign(c.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                         <Trash2 className="w-4 h-4"/>
+                                     </button>
+                                 </div>
+                             </div>
 
-interface LoginModalProps {
-  onLogin: () => void;
-}
+                             {/* Progress Bar */}
+                             <div className="w-full bg-slate-100 rounded-full h-2.5 mb-2 flex overflow-hidden">
+                                 <div className="bg-emerald-500 h-full transition-all duration-500" style={{ width: `${sentPercent}%` }} title={`Sent: ${sent}`} />
+                                 <div className="bg-red-500 h-full transition-all duration-500" style={{ width: `${failedPercent}%` }} title={`Failed: ${failed}`} />
+                             </div>
 
-const LoginModal: React.FC<LoginModalProps> = ({ onLogin }) => {
-  const [accessCode, setAccessCode] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    // Simulate API Check - One Time Password / Access Key
-    setTimeout(() => {
-        if (accessCode.trim() === '123456') { // Hardcoded specific key
-            setLoading(false);
-            onLogin();
-        } else {
-            setLoading(false);
-            setError('Invalid Access Code. Please try again.');
-        }
-    }, 800);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900 z-[100] flex items-center justify-center p-4 bg-[url('https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?ixlib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80')] bg-cover bg-center">
-      <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm"></div>
-      
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-8 animate-in zoom-in-95 duration-300 relative z-10">
-        <div className="flex justify-center mb-6">
-           <div className="w-20 h-20 bg-emerald-600 rounded-full flex items-center justify-center text-white font-serif font-bold text-4xl shadow-lg shadow-emerald-900/20 border-4 border-emerald-100">
-             D
-          </div>
-        </div>
-        <h2 className="text-2xl font-bold text-center text-slate-800 mb-1">DesiChai</h2>
-        <p className="text-center text-slate-500 mb-8 text-sm">WhatsApp Business Manager</p>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-             <label className="text-sm font-medium text-slate-700">Enter Access Code</label>
-             <div className="relative">
-                <Lock className="absolute left-3 top-2.5 w-5 h-5 text-slate-400" />
-                <input 
-                  type="password" 
-                  value={accessCode}
-                  onChange={(e) => setAccessCode(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none font-mono tracking-widest text-center text-lg"
-                  placeholder="••••••"
-                  maxLength={6}
-                  autoFocus
-                  required
-                />
-             </div>
-             {error && <p className="text-red-500 text-xs mt-1 text-center">{error}</p>}
-          </div>
-          
-          <button 
-            type="submit"
-            disabled={loading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 mt-4 shadow-lg shadow-emerald-500/30"
-          >
-            {loading ? <Loader2 className="animate-spin w-5 h-5" /> : "Access Dashboard"}
-          </button>
-        </form>
-        
-        <p className="text-center text-xs text-slate-400 mt-6">
-          Authorized personnel only.
-        </p>
-      </div>
-    </div>
-  );
-};
-
-interface ProfileModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  user: UserProfile;
-  onLogout: () => void;
-  onUpdateAvatar: (url: string) => void;
-  onExportData: () => void;
-  onImportData: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onUpdateUser: (updated: Partial<UserProfile>) => void;
-}
-
-const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onLogout, onUpdateAvatar, onExportData, onImportData, onUpdateUser }) => {
-  if (!isOpen) return null;
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              onUpdateAvatar(reader.result as string);
-          };
-          reader.readAsDataURL(file);
-      }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-end animate-in fade-in duration-200">
-        <div className="h-full w-full max-w-md bg-white shadow-2xl animate-in slide-in-from-right duration-300 p-6 flex flex-col overflow-y-auto">
-            <div className="flex justify-between items-center mb-8">
-               <h2 className="text-xl font-bold text-slate-800">Your Profile</h2>
-               <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                  <X className="w-6 h-6 text-slate-500" />
-               </button>
-            </div>
-            
-            <div className="flex flex-col items-center mb-8">
-               <div className="relative group cursor-pointer">
-                  <div className="w-28 h-28 rounded-full bg-slate-200 mb-4 overflow-hidden border-4 border-slate-50 shadow-lg relative">
-                      <img src={user.avatar} alt="Profile" className="w-full h-full object-cover" />
-                      <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Camera className="w-8 h-8 text-white" />
-                      </div>
-                  </div>
-                  <input 
-                      type="file" 
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      accept="image/*"
-                      onChange={handleFileChange}
-                      title="Change Profile Photo"
-                  />
-                  <div className="absolute bottom-4 right-0 bg-emerald-500 rounded-full p-1.5 border-2 border-white shadow-sm pointer-events-none">
-                      <Camera className="w-3 h-3 text-white" />
+                             {/* Stats */}
+                             <div className="flex justify-between text-xs text-slate-500 font-medium">
+                                 <div className="flex gap-3">
+                                     <span className="flex items-center gap-1 text-emerald-600"><CheckCircle className="w-3 h-3" /> {sent}</span>
+                                     <span className="flex items-center gap-1 text-red-500"><AlertTriangle className="w-3 h-3" /> {failed}</span>
+                                     <span className="flex items-center gap-1 text-slate-400"><Clock className="w-3 h-3" /> {pending}</span>
+                                 </div>
+                                  {c.status === 'running' && <span className="text-emerald-600 animate-pulse text-[10px] uppercase font-bold flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin"/> Processing</span>}
+                                  {c.status === 'completed' && <span className="text-blue-600 text-[10px] uppercase font-bold">Done</span>}
+                             </div>
+                         </div>
+                       );
+                     })}
                   </div>
                </div>
-               
-               <h3 className="text-xl font-bold text-slate-800">{user.name}</h3>
-               <p className="text-slate-500">{user.email}</p>
-               <span className="mt-2 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide">
-                 {user.plan} Plan
-               </span>
-            </div>
-            
-            <div className="space-y-4 mb-8">
-                <h4 className="text-sm font-semibold text-slate-800 uppercase tracking-wide border-b border-slate-100 pb-2">Business Details for Buttons</h4>
-                
-                <FormInput 
-                    label="Business Phone (for 'Call Us')"
-                    value={user.businessPhone || ''}
-                    onChange={(e) => onUpdateUser({ businessPhone: e.target.value })}
-                    placeholder="+1234567890"
-                />
-                <FormInput 
-                    label="Website URL (for 'Visit Us')"
-                    value={user.website || ''}
-                    onChange={(e) => onUpdateUser({ website: e.target.value })}
-                    placeholder="https://www.example.com"
-                />
-                <FormInput 
-                    label="Map/Location URL (for 'Location')"
-                    value={user.locationUrl || ''}
-                    onChange={(e) => onUpdateUser({ locationUrl: e.target.value })}
-                    placeholder="https://maps.google.com/..."
-                />
-            </div>
 
-            <div className="space-y-2 mb-6">
-                <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-slate-50 transition-colors text-left border border-transparent hover:border-slate-200 group">
-                    <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
-                        <Settings className="w-5 h-5" />
-                    </div>
-                    <div>
-                        <h4 className="font-medium text-slate-800">Account Settings</h4>
-                        <p className="text-xs text-slate-500">Manage your preferences</p>
-                    </div>
-                </button>
-            </div>
-
-            <div className="mb-6 p-4 rounded-xl border border-slate-100 bg-slate-50/50">
-               <h4 className="text-sm font-semibold text-slate-800 mb-3 uppercase tracking-wider text-xs">Data Management</h4>
-               <div className="grid grid-cols-2 gap-3">
-                  <button 
-                    onClick={onExportData}
-                    className="flex flex-col items-center justify-center gap-2 p-3 bg-white border border-slate-200 rounded-lg hover:border-emerald-300 hover:shadow-sm transition-all text-slate-600 hover:text-emerald-600"
-                  >
-                      <Download className="w-5 h-5" />
-                      <span className="text-xs font-medium">Backup Data</span>
-                  </button>
-                  <label className="flex flex-col items-center justify-center gap-2 p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-300 hover:shadow-sm transition-all text-slate-600 hover:text-blue-600 cursor-pointer">
-                      <UploadCloud className="w-5 h-5" />
-                      <span className="text-xs font-medium">Restore Data</span>
-                      <input type="file" className="hidden" accept=".json" onChange={onImportData} />
-                  </label>
-               </div>
-               <p className="text-[10px] text-slate-400 mt-2 text-center">
-                  Backup your contacts and settings to a secure file.
-               </p>
-            </div>
-            
-            <button 
-                onClick={onLogout}
-                className="w-full flex items-center justify-center gap-2 p-4 rounded-xl bg-slate-50 text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors font-medium mt-auto"
-            >
-                <LogOut className="w-5 h-5" /> Sign Out
-            </button>
-        </div>
-    </div>
-  );
-};
-
-
-// --- MAIN APP COMPONENT ---
-
-const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
-  
-  // Persistent User Profile
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-      try {
-          const saved = localStorage.getItem('desichai_profile');
-          return saved ? JSON.parse(saved) : DEFAULT_PROFILE;
-      } catch (e) {
-          return DEFAULT_PROFILE;
-      }
-  });
-
-  // Save profile whenever it changes
-  useEffect(() => {
-      localStorage.setItem('desichai_profile', JSON.stringify(userProfile));
-  }, [userProfile]);
-
-  const [currentView, setCurrentView] = useState<ViewState>('dashboard');
-  
-  // Initialize contacts from LocalStorage or fallback to default
-  const [contacts, setContacts] = useState<Contact[]>(() => {
-    try {
-      const saved = localStorage.getItem('genconnect_contacts');
-      return saved ? JSON.parse(saved) : DEFAULT_CONTACTS;
-    } catch (e) {
-      return DEFAULT_CONTACTS;
-    }
-  });
-
-  // Initialize scheduled campaigns
-  const [scheduledCampaigns, setScheduledCampaigns] = useState<Campaign[]>(() => {
-      try {
-          const saved = localStorage.getItem('desichai_scheduled');
-          return saved ? JSON.parse(saved) : [];
-      } catch (e) {
-          return [];
-      }
-  });
-
-  useEffect(() => {
-      localStorage.setItem('desichai_scheduled', JSON.stringify(scheduledCampaigns));
-  }, [scheduledCampaigns]);
-
-  // Dashboard stats
-  const [dashboardStats, setDashboardStats] = useState({
-      total: contacts.length,
-      sent: 0,
-      responseRate: 0,
-      chartData: MOCK_CHART_DATA
-  });
-
-  // Persist contacts
-  useEffect(() => {
-    localStorage.setItem('genconnect_contacts', JSON.stringify(contacts));
-    setDashboardStats(prev => ({...prev, total: contacts.length}));
-  }, [contacts]);
-  
-  // Campaign State
-  const [campaignGoal, setCampaignGoal] = useState('');
-  const [campaignAudience, setCampaignAudience] = useState('All VIP customers');
-  const [generatedMessage, setGeneratedMessage] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
-  const [campaignImage, setCampaignImage] = useState<string | null>(null);
-  
-  // Bulk Sending State
-  const [isBulkSending, setIsBulkSending] = useState(false);
-  const [bulkQueue, setBulkQueue] = useState<Contact[]>([]);
-  const [bulkCurrentIndex, setBulkCurrentIndex] = useState(0);
-
-  // Segment State
-  const [isSegmenting, setIsSegmenting] = useState(false);
-  const [segments, setSegments] = useState<{name: string, reason: string, contactIds: string[]}[]>([]);
-
-  // Modal Visibility State
-  const [showConfirmation, setShowConfirmation] = useState(false);
-  const [showAddContact, setShowAddContact] = useState(false);
-  const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [pendingContact, setPendingContact] = useState<Contact | null>(null);
-
-  // Contacts View State
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterTag, setFilterTag] = useState<string>('All');
-
-  // Notification State
-  const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
-
-  const TEST_NUMBER = '9014427480';
-
-  // Helper: Show Notification
-  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 3000);
-  };
-
-  // Timer Check for Scheduled Campaigns
-  useEffect(() => {
-      const interval = setInterval(() => {
-          const now = new Date();
-          const due = scheduledCampaigns.filter(c => 
-              c.status === 'scheduled' && 
-              c.scheduledFor && 
-              new Date(c.scheduledFor) <= now
-          );
-
-          if (due.length > 0) {
-              // Only notify if we haven't already marked them as ready/notified to prevent spamming
-              // In this simple app, we just check if they are 'scheduled'. 
-              // We'll trust the user to act on the visual cue, but a toast helps.
-              showNotification(`📅 You have ${due.length} scheduled campaign(s) ready to launch!`, 'success');
-          }
-      }, 60000); // Check every minute
-
-      return () => clearInterval(interval);
-  }, [scheduledCampaigns]);
-
-  // Helper: Personalize Message with Dynamic Placeholders
-  const personalizeMessage = (template: string, contact: Contact) => {
-    const firstName = contact.name.split(' ')[0] || 'Friend';
-    let msg = template
-      .replace(/{firstName}/g, firstName)
-      .replace(/{name}/g, contact.name || 'Valued Customer')
-      .replace(/{phone}/g, contact.phone);
-
-    // Dynamic custom placeholders logic
-    if (contact.company) {
-        msg = msg.replace(/{company}/g, contact.company);
-        msg = msg.replace(/{companyName}/g, contact.company);
-    } else {
-        // Fallback if company is missing but placeholder exists
-        msg = msg.replace(/{company}/g, 'your company').replace(/{companyName}/g, 'your company');
-    }
-    
-    return msg;
-  };
-
-  // Handlers
-  const handleGenerateMessage = async () => {
-    if (!campaignGoal) return;
-    setIsGenerating(true);
-    const msg = await generateCampaignMessage(campaignGoal, campaignAudience);
-    setGeneratedMessage(msg);
-    setIsGenerating(false);
-  };
-
-  const handleAnalyzeSegments = async () => {
-    setIsSegmenting(true);
-    const result = await analyzeSegments(contacts);
-    setSegments(result);
-    setIsSegmenting(false);
-  };
-
-  const initiateSend = (contact: Contact) => {
-    setPendingContact(contact);
-    setShowConfirmation(true);
-  };
-
-  const handleScheduleCampaign = (date: string, time: string) => {
-      const scheduledDateTime = new Date(`${date}T${time}`).toISOString();
-      
-      const newCampaign: Campaign = {
-          id: generateId(),
-          name: campaignGoal || 'Untitled Campaign',
-          status: 'scheduled',
-          messageTemplate: generatedMessage,
-          targetSegment: campaignAudience,
-          sentCount: 0,
-          totalCount: selectedContactIds.length,
-          scheduledFor: scheduledDateTime,
-          recipientIds: selectedContactIds,
-          image: campaignImage
-      };
-
-      setScheduledCampaigns(prev => [...prev, newCampaign]);
-      showNotification("Campaign scheduled successfully!");
-      // Reset form
-      setCampaignGoal('');
-      setGeneratedMessage('');
-      setSelectedContactIds([]);
-  };
-
-  const handleLaunchScheduled = (campaign: Campaign) => {
-      if (!campaign.recipientIds || campaign.recipientIds.length === 0) return;
-      
-      setGeneratedMessage(campaign.messageTemplate);
-      setCampaignImage(campaign.image || null);
-      setSelectedContactIds(campaign.recipientIds);
-      setCampaignAudience(campaign.targetSegment);
-      setCampaignGoal(campaign.name);
-      
-      // Update status to active/completed later, for now we just load it
-      // Maybe remove it from scheduled list or mark as processed?
-      // Let's mark it as completed in the scheduled list so it moves/disappears or user manually deletes
-      // For now, let's just load it into the builder so user can click "Start Bulk"
-      
-      showNotification("Campaign loaded. Click 'Start Bulk Campaign' to begin.");
-      // Scroll to top or switch view if needed
-      setCurrentView('campaigns');
-  };
-
-  const deleteScheduledCampaign = (id: string) => {
-      setScheduledCampaigns(prev => prev.filter(c => c.id !== id));
-      showNotification("Scheduled campaign removed.");
-  };
-
-  // BULK SEND LOGIC
-  const startBulkCampaign = () => {
-      if (!generatedMessage) {
-          showNotification("Please generate a message first.", 'error');
-          return;
-      }
-      
-      let queue: Contact[] = [];
-      if (selectedContactIds.length > 0) {
-          queue = contacts.filter(c => selectedContactIds.includes(c.id));
-      } else {
-           queue = contacts;
-      }
-
-      if (queue.length === 0) {
-          showNotification("No contacts to send to.", 'error');
-          return;
-      }
-
-      setBulkQueue(queue);
-      setBulkCurrentIndex(0);
-      setIsBulkSending(true);
-  };
-
-  const handleBulkSendNext = async (): Promise<boolean> => {
-      const contact = bulkQueue[bulkCurrentIndex];
-      if (!contact) return false;
-
-       // Copy Image FIRST (Async operation needs focus, do before window.open)
-       if (campaignImage) {
-        try {
-            const blob = await convertImageToPngBlob(campaignImage);
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-            showNotification("Image Copied! Paste (Ctrl+V) in WhatsApp", "success");
-        } catch (err) {
-             console.error("Auto-copy failed", err);
-             // Don't block sending if copy fails (common in auto-send mode without user gesture)
-             if (!isBulkSending) { // Warn if manual
-                 showNotification("Could not auto-copy. Please use manual button.", "error");
-             }
-        }
-    }
-
-    const personalizedMsg = personalizeMessage(generatedMessage, contact);
-    const encodedMessage = encodeURIComponent(personalizedMsg);
-    const url = `https://wa.me/${contact.phone}?text=${encodedMessage}`;
-    
-    // Open WA
-    const newWindow = window.open(url, '_blank');
-    
-    if (newWindow) {
-        // Advance Queue
-        setBulkCurrentIndex(prev => prev + 1);
-        setDashboardStats(prev => ({...prev, sent: prev.sent + 1}));
-        return true;
-    } else {
-        return false; // Popup blocked
-    }
-  };
-
-  const handleBulkSkip = () => {
-      setBulkCurrentIndex(prev => prev + 1);
-  };
-
-  const confirmSend = async () => {
-    if (!pendingContact || !generatedMessage) return;
-
-    // Try to copy image to clipboard if exists FIRST
-    if (campaignImage) {
-        try {
-            const blob = await convertImageToPngBlob(campaignImage);
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-            showNotification("Image copied! Paste (Ctrl+V) in WhatsApp", 'success');
-        } catch (err) {
-            console.error("Could not copy image: ", err);
-            showNotification("Could not auto-copy image. Please attach manually.", 'error');
-        }
-    }
-
-    const personalizedMsg = personalizeMessage(generatedMessage, pendingContact);
-    
-    // WhatsApp Web URL Scheme
-    const encodedMessage = encodeURIComponent(personalizedMsg);
-    const url = `https://wa.me/${pendingContact.phone}?text=${encodedMessage}`;
-    
-    // Open window AFTER clipboard op
-    setTimeout(() => {
-        window.open(url, '_blank');
-        // Increment sent count manually for effect
-        setDashboardStats(prev => ({...prev, sent: prev.sent + 1}));
-    }, 100);
-    
-    setShowConfirmation(false);
-    setPendingContact(null);
-  };
-
-  const sendTestToMe = async () => {
-    if (!generatedMessage) return;
-
-    if (campaignImage) {
-        try {
-            const blob = await convertImageToPngBlob(campaignImage);
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-            showNotification("Image copied! Paste (Ctrl+V) in WhatsApp", 'success');
-        } catch (err) {
-            console.error(err);
-            showNotification("Could not auto-copy image. Please attach manually.", 'error');
-        }
-    }
-
-    const mockContact = { name: 'Test User', phone: TEST_NUMBER, company: 'Test Company' } as Contact;
-    const personalizedMsg = personalizeMessage(generatedMessage, mockContact);
-    const encodedMessage = encodeURIComponent(personalizedMsg);
-    const url = `https://wa.me/${TEST_NUMBER}?text=${encodedMessage}`;
-    
-    setTimeout(() => {
-        window.open(url, '_blank');
-    }, 100);
-  };
-
-  const handleCampaignImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCampaignImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSingleAdd = (data: Partial<Contact>) => {
-      const newContact: Contact = {
-          id: generateId(),
-          name: data.name || 'Unknown',
-          phone: data.phone || '',
-          company: data.company || '',
-          tags: data.tags || [],
-          lastInteraction: new Date().toISOString().split('T')[0],
-          sentiment: 'neutral',
-          avatar: data.avatar
-      };
-      setContacts(prev => [newContact, ...prev]);
-      setShowAddContact(false);
-      showNotification("Contact added successfully!");
-  };
-
-  const handleUpdateContact = (updatedContact: Contact) => {
-      setContacts(prev => prev.map(c => c.id === updatedContact.id ? updatedContact : c));
-      setEditingContact(null);
-      showNotification("Contact updated successfully!");
-  };
-
-  const handleBulkAdd = (text: string) => {
-        const lines = text.split('\n');
-        const newContacts: Contact[] = [];
-        let skipped = 0;
-        
-        lines.forEach((line) => {
-            const cleanLine = line.trim();
-            if (!cleanLine) return;
-
-            let name = '';
-            let phoneRaw = '';
-
-            const delimiterMatch = cleanLine.match(/[\t,;]/);
-            if (delimiterMatch) {
-                const parts = cleanLine.split(delimiterMatch[0]);
-                const phoneIdx = parts.findIndex(p => p.replace(/\D/g, '').length >= 7);
-                if (phoneIdx !== -1) {
-                    phoneRaw = parts[phoneIdx];
-                    name = parts.filter((_, i) => i !== phoneIdx).join(' ').trim();
-                }
-            } 
-            
-            if (!phoneRaw) {
-                 const phoneMatch = cleanLine.match(/[\d+\-\(\)]{7,}/);
-                 if (phoneMatch) {
-                     phoneRaw = phoneMatch[0];
-                     name = cleanLine.replace(phoneRaw, '').trim();
-                 }
-            }
-
-            if (phoneRaw) {
-                const phoneClean = phoneRaw.replace(/[^\d+]/g, '');
-                name = name.replace(/^[,.\-;|]+|[,.\-;|]+$/g, '').trim();
-                if (!name) name = "Unknown Contact";
-
-                if (phoneClean.length >= 7) {
-                    newContacts.push({
-                        id: generateId(),
-                        name,
-                        phone: phoneClean,
-                        tags: ['imported'],
-                        lastInteraction: new Date().toISOString().split('T')[0],
-                        sentiment: 'neutral'
-                    });
-                } else {
-                    skipped++;
-                }
-            } else {
-                skipped++;
-            }
-        });
-
-        if (newContacts.length > 0) {
-            setContacts(prev => [...newContacts, ...prev]);
-            showNotification(`Successfully imported ${newContacts.length} contacts.`);
-            setShowAddContact(false);
-        } else {
-          showNotification(skipped > 0 ? "No valid contacts found." : "Please enter some data.", 'error');
-        }
-  };
-
-  const deleteContact = (id: string) => {
-    setContacts(prev => prev.filter(c => c.id !== id));
-    setSelectedContactIds(prev => prev.filter(selectedId => selectedId !== id));
-    showNotification("Contact deleted permanently.");
-  };
-
-  const handleBulkDelete = () => {
-      if (selectedContactIds.length === 0) return;
-      setContacts(prev => prev.filter(c => !selectedContactIds.includes(c.id)));
-      const count = selectedContactIds.length;
-      setSelectedContactIds([]);
-      showNotification(`${count} contacts deleted permanently.`);
-  };
-
-  const removeFromCampaign = (id: string) => {
-      setSelectedContactIds(prev => prev.filter(selectedId => selectedId !== id));
-      showNotification("Removed from current campaign list.");
-  };
-
-  const applySegment = (contactIds: string[]) => {
-    setSelectedContactIds(contactIds);
-    setCurrentView('campaigns');
-    const names = contacts.filter(c => contactIds.includes(c.id)).map(c => c.name).join(', ');
-    setCampaignAudience(`Segment: ${names.substring(0, 30)}...`);
-  };
-
-  const handleLogout = () => {
-      setIsLoggedIn(false);
-      setShowProfile(false);
-  };
-  
-  const handleProfileUpdate = (newAvatar: string) => {
-      setUserProfile(prev => ({...prev, avatar: newAvatar}));
-      showNotification("Profile photo updated successfully!");
-  };
-
-  const handleUpdateUser = (updated: Partial<UserProfile>) => {
-      setUserProfile(prev => ({ ...prev, ...updated }));
-  };
-  
-  const refreshDashboard = () => {
-      const randomSent = Math.floor(Math.random() * 500) + 1000;
-      const randomRate = Math.floor(Math.random() * 20) + 70;
-      const randomData = MOCK_CHART_DATA.map(d => ({
-        ...d,
-        sent: Math.floor(Math.random() * 50),
-        replies: Math.floor(Math.random() * 30)
-      }));
-      setDashboardStats(prev => ({
-          ...prev,
-          sent: randomSent,
-          responseRate: randomRate,
-          chartData: randomData
-      }));
-      showNotification("Dashboard data refreshed.");
-  };
-
-  const handleExportData = () => {
-      const backupData = {
-          contacts: contacts,
-          userProfile: userProfile,
-          scheduled: scheduledCampaigns,
-          timestamp: new Date().toISOString(),
-          version: '1.0'
-      };
-      
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `desichai_backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      showNotification("Backup file downloaded successfully!", "success");
-  };
-
-  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-          try {
-              const data = JSON.parse(event.target?.result as string);
-              
-              if (data.contacts && Array.isArray(data.contacts)) {
-                  setContacts(data.contacts);
-              }
-              if (data.userProfile) {
-                  setUserProfile(data.userProfile);
-              }
-              if (data.scheduled) {
-                  setScheduledCampaigns(data.scheduled);
-              }
-              
-              showNotification("Data restored successfully!", "success");
-              setShowProfile(false);
-          } catch (err) {
-              console.error(err);
-              showNotification("Invalid backup file.", "error");
-          }
-      };
-      reader.readAsText(file);
-      // Reset input value to allow re-uploading same file if needed
-      e.target.value = '';
-  };
-  
-  // Append CTA Text Logic
-  const appendCTA = (type: 'call' | 'website' | 'location') => {
-      let textToAppend = '';
-      if (type === 'call') {
-          if (!userProfile.businessPhone) {
-              showNotification("Please set Business Phone in Profile first.", "error");
-              setShowProfile(true);
-              return;
-          }
-          textToAppend = `\n\n📞 Call Us: ${userProfile.businessPhone}`;
-      } else if (type === 'website') {
-          if (!userProfile.website) {
-              showNotification("Please set Website in Profile first.", "error");
-              setShowProfile(true);
-              return;
-          }
-           textToAppend = `\n\n🌐 Visit Our Website: ${userProfile.website}`;
-      } else if (type === 'location') {
-           if (!userProfile.locationUrl) {
-              showNotification("Please set Location URL in Profile first.", "error");
-              setShowProfile(true);
-              return;
-          }
-          textToAppend = `\n\n📍 Find Us: ${userProfile.locationUrl}`;
-      }
-      
-      setGeneratedMessage(prev => prev + textToAppend);
-      showNotification("Action Button added!");
-  };
-
-  if (!isLoggedIn) {
-    return <LoginModal onLogin={() => setIsLoggedIn(true)} />;
-  }
-
-  const toggleSelectAll = () => {
-      if (selectedContactIds.length === contacts.length && contacts.length > 0) {
-          setSelectedContactIds([]);
-      } else {
-          setSelectedContactIds(contacts.map(c => c.id));
-      }
-  };
-
-  const toggleSelectContact = (id: string) => {
-      setSelectedContactIds(prev => 
-          prev.includes(id) ? prev.filter(cid => cid !== id) : [...prev, id]
-      );
-  };
-
-  // Filter contacts for display
-  const filteredContacts = contacts.filter(c => {
-      const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone.includes(searchTerm);
-      const matchesTag = filterTag === 'All' || c.tags.includes(filterTag);
-      return matchesSearch && matchesTag;
-  });
-
-  const renderDashboard = () => (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-500 mb-1">Total Contacts</p>
-            <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.total}</h3>
-          </div>
-          <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-            <Users className="w-6 h-6" />
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-500 mb-1">Messages Sent</p>
-            <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.sent}</h3>
-          </div>
-          <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
-            <Send className="w-6 h-6" />
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-500 mb-1">Response Rate</p>
-            <h3 className="text-3xl font-bold text-slate-800">{dashboardStats.responseRate}%</h3>
-          </div>
-          <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-purple-600">
-            <MessageSquare className="w-6 h-6" />
-          </div>
-        </div>
-      </div>
-      
-      <div className="relative">
-          <DashboardChart data={dashboardStats.chartData} />
-          <button onClick={refreshDashboard} className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors">
-              <RefreshCw className="w-4 h-4" />
-          </button>
-      </div>
-
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-lg font-bold text-slate-800">AI Segment Suggestions</h3>
-          <button 
-            onClick={handleAnalyzeSegments} 
-            disabled={isSegmenting}
-            className="flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
-          >
-            {isSegmenting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            Analyze Contacts
-          </button>
-        </div>
-        
-        {segments.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {segments.map((segment, idx) => (
-              <div key={idx} className="border border-slate-200 rounded-lg p-4 hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer bg-slate-50 hover:bg-white group" onClick={() => applySegment(segment.contactIds)}>
-                <div className="flex justify-between items-start mb-2">
-                    <h4 className="font-semibold text-slate-800 group-hover:text-emerald-600">{segment.name}</h4>
-                    <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{segment.contactIds.length}</span>
-                </div>
-                <p className="text-sm text-slate-500">{segment.reason}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-10 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-            <Users className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No segments analyzed yet. Click Analyze to group your contacts using AI.</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderCampaigns = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300 h-full">
-      <div className="lg:col-span-1 space-y-6 flex flex-col h-full overflow-hidden">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-emerald-500" />
-            AI Message Creator
-          </h3>
-          <div className="space-y-4">
-            <FormInput 
-              label="Campaign Goal" 
-              placeholder="e.g. Promote summer sale" 
-              value={campaignGoal}
-              onChange={(e) => setCampaignGoal(e.target.value)}
-            />
-            <FormInput 
-              label="Target Audience" 
-              placeholder="e.g. Recent buyers" 
-              value={campaignAudience}
-              onChange={(e) => setCampaignAudience(e.target.value)}
-            />
-            <button 
-              onClick={handleGenerateMessage}
-              disabled={isGenerating || !campaignGoal}
-              className="w-full bg-slate-900 text-white py-2.5 rounded-lg font-medium hover:bg-slate-800 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
-            >
-              {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Generate Message"}
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <ImageIcon className="w-5 h-5 text-blue-500" />
-                Campaign Image
-            </h3>
-            <div className="relative">
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors">
-                    {campaignImage ? (
-                        <div className="relative w-full h-full">
-                            <img src={campaignImage} alt="Campaign" className="w-full h-full object-cover rounded-lg" />
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white text-xs opacity-0 hover:opacity-100 transition-opacity rounded-lg">
-                                Click to change
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                            <Upload className="w-8 h-8 text-slate-400 mb-2" />
-                            <p className="text-xs text-slate-500">Click to upload image</p>
-                        </div>
-                    )}
-                    <input type="file" className="hidden" accept="image/*" onChange={handleCampaignImageUpload} />
-                </label>
-            </div>
-        </div>
-
-        {/* Scheduled Campaigns List */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex-1 overflow-y-auto min-h-[200px]">
-            <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <Clock className="w-5 h-5 text-amber-500" />
-                Scheduled ({scheduledCampaigns.length})
-            </h3>
-            {scheduledCampaigns.length === 0 ? (
-                <p className="text-sm text-slate-400 italic text-center py-4">No pending campaigns.</p>
-            ) : (
-                <div className="space-y-3">
-                    {scheduledCampaigns.map(c => {
-                        const isDue = c.scheduledFor ? new Date(c.scheduledFor) <= new Date() : false;
-                        const dateObj = c.scheduledFor ? new Date(c.scheduledFor) : null;
+               <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                  <h3 className="font-bold text-xl mb-6 flex items-center gap-2">
+                     <Send className="w-5 h-5 text-emerald-600" /> New Campaign
+                  </h3>
+                  
+                  <div className="flex items-center gap-4 mb-8">
+                     {[1, 2, 3].map(i => (
+                        <div key={i} className={`flex-1 h-1 rounded-full ${campaignStep >= i ? 'bg-emerald-500' : 'bg-slate-100'}`} />
+                     ))}
+                  </div>
+
+                  {campaignStep === 1 && (
+                     <div className="space-y-4">
+                        <FormInput label="Campaign Name" value={draftCampaign.name || ''} onChange={e => setDraftCampaign({...draftCampaign, name: e.target.value})} />
                         
-                        return (
-                            <div key={c.id} className={`p-3 rounded-lg border text-left transition-all ${isDue ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
-                                <div className="flex justify-between items-start mb-1">
-                                    <h4 className="font-semibold text-slate-800 text-sm truncate w-32" title={c.name}>{c.name}</h4>
-                                    <button onClick={() => deleteScheduledCampaign(c.id)} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
-                                </div>
-                                <p className="text-xs text-slate-500 flex items-center gap-1 mb-2">
-                                    <Calendar className="w-3 h-3" />
-                                    {dateObj?.toLocaleDateString()} {dateObj?.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                </p>
-                                <button 
-                                    onClick={() => handleLaunchScheduled(c)}
-                                    className={`w-full py-1.5 rounded text-xs font-bold ${isDue ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-500'}`}
-                                >
-                                    {isDue ? 'Launch Now' : 'Load & Edit'}
-                                </button>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
-      </div>
-
-      <div className="lg:col-span-2 flex flex-col h-full">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-full flex flex-col">
-          <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-slate-800">Message Preview</h3>
-              
-              <div className="flex gap-2">
-                  <button onClick={() => appendCTA('call')} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors border border-blue-200">
-                      <Phone className="w-3 h-3" /> Call Us
-                  </button>
-                  <button onClick={() => appendCTA('website')} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-medium hover:bg-indigo-100 transition-colors border border-indigo-200">
-                      <Globe className="w-3 h-3" /> Visit Our Website
-                  </button>
-                  <button onClick={() => appendCTA('location')} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors border border-red-200">
-                      <MapPin className="w-3 h-3" /> Share Location
-                  </button>
-              </div>
-          </div>
-          
-          <div className="mb-4">
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-2">
-                <p className="text-xs text-slate-500 mb-1">Dynamic Placeholders available:</p>
-                <div className="flex gap-2 flex-wrap">
-                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{firstName}`}</span>
-                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{name}`}</span>
-                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{phone}`}</span>
-                    <span className="text-xs font-mono bg-white px-1.5 py-0.5 border border-slate-200 rounded text-emerald-600">{`{company}`}</span>
-                </div>
-            </div>
-            <textarea
-              className="w-full h-48 p-4 bg-slate-50 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-sans resize-none text-slate-700"
-              placeholder="Your generated message will appear here..."
-              value={generatedMessage}
-              onChange={(e) => setGeneratedMessage(e.target.value)}
-            />
-          </div>
-
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center mb-2">
-                <h4 className="font-semibold text-slate-700 text-sm">Recipients ({selectedContactIds.length})</h4>
-                <div className="flex gap-2">
-                    <button 
-                        onClick={toggleSelectAll}
-                        className="text-xs font-medium text-slate-500 hover:text-emerald-600 underline"
-                    >
-                        {selectedContactIds.length === contacts.length ? 'Deselect All' : 'Select All'}
-                    </button>
-                </div>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto border border-slate-100 rounded-lg bg-slate-50">
-              {contacts.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400 p-8">
-                      <Users className="w-8 h-8 mb-2" />
-                      <p className="text-sm">No contacts available.</p>
-                  </div>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                    {contacts.map(contact => {
-                        const isSelected = selectedContactIds.includes(contact.id);
-                        return (
-                            <div key={contact.id} className={`flex items-center justify-between p-3 hover:bg-white transition-colors ${isSelected ? 'bg-emerald-50/50' : ''}`}>
-                                <div className="flex items-center gap-3">
-                                    <button 
-                                        onClick={() => toggleSelectContact(contact.id)}
-                                        className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-slate-300 text-transparent'}`}
-                                    >
-                                        <CheckSquare className="w-3.5 h-3.5" />
-                                    </button>
-                                    <div className="w-8 h-8 rounded-full bg-slate-200 flex-shrink-0 overflow-hidden">
-                                        {contact.avatar ? (
-                                            <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-slate-400"><Users className="w-4 h-4" /></div>
-                                        )}
-                                    </div>
-                                    <div>
-                                        <p className="text-sm font-medium text-slate-800">{contact.name}</p>
-                                        <div className="flex items-center gap-2">
-                                            <p className="text-xs text-slate-500">{contact.phone}</p>
-                                            {contact.company && <span className="text-[10px] bg-slate-100 px-1.5 rounded text-slate-500">{contact.company}</span>}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button onClick={() => removeFromCampaign(contact.id)} className="text-slate-400 hover:text-red-500 p-1" title="Remove from list">
-                                        <MinusCircle className="w-4 h-4" />
-                                    </button>
-                                    {isSelected && (
-                                        <button 
-                                            onClick={() => initiateSend(contact)}
-                                            disabled={!generatedMessage}
-                                            className="px-3 py-1.5 bg-emerald-500 text-white text-xs rounded-md hover:bg-emerald-600 disabled:opacity-50"
-                                        >
-                                            Send
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-              )}
-            </div>
-            
-            <div className="mt-4 pt-4 border-t border-slate-100 flex gap-3">
-                 <button 
-                    onClick={() => setShowScheduleModal(true)}
-                    disabled={selectedContactIds.length < 1 || !generatedMessage}
-                    className="flex-1 py-3 bg-white border border-slate-300 text-slate-700 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                 >
-                     <Calendar className="w-4 h-4 text-slate-600" />
-                     Schedule for Later
-                 </button>
-                 <button 
-                    onClick={startBulkCampaign}
-                    disabled={selectedContactIds.length < 1 || !generatedMessage}
-                    className="flex-[2] py-3 bg-slate-900 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                 >
-                     <Play className="w-4 h-4 text-emerald-400" />
-                     Start Bulk Campaign ({selectedContactIds.length > 0 ? selectedContactIds.length : 'All'})
-                 </button>
-            </div>
-            <p className="text-center text-xs text-slate-400 mt-2">
-                     Will queue messages and send one by one.
-             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderContacts = () => {
-    // Extract all unique tags
-    const allTags = ['All', ...Array.from(new Set(contacts.flatMap(c => c.tags))).sort()];
-
-    return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in duration-300 flex flex-col h-full">
-      <div className="p-6 border-b border-slate-100 flex flex-col gap-4 bg-slate-50/50">
-        <div className="flex justify-between items-center">
-            <h3 className="text-lg font-bold text-slate-800">Contact Management</h3>
-            <div className="flex gap-3">
-            <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input 
-                    type="text" 
-                    placeholder="Search contacts..." 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-64"
-                />
-            </div>
-            {selectedContactIds.length > 0 && (
-                <button 
-                    onClick={handleBulkDelete}
-                    className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors border border-red-200"
-                >
-                    <Trash2 className="w-4 h-4" /> Delete ({selectedContactIds.length})
-                </button>
-            )}
-            <button 
-                onClick={() => setShowAddContact(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
-            >
-                <Plus className="w-4 h-4" /> Add Contact
-            </button>
-            </div>
-        </div>
-        
-        {/* Tag Filters */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-            <span className="text-xs font-semibold text-slate-500 uppercase mr-2">Filters:</span>
-            {allTags.map(tag => (
-                <button
-                    key={tag}
-                    onClick={() => setFilterTag(tag)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors border ${
-                        filterTag === tag 
-                        ? 'bg-slate-800 text-white border-slate-800' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                    }`}
-                >
-                    {tag}
-                </button>
-            ))}
-        </div>
-      </div>
-      
-      <div className="overflow-x-auto flex-1">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-              <th className="p-4 w-12">
-                  <button 
-                    onClick={toggleSelectAll} 
-                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedContactIds.length > 0 && selectedContactIds.length === contacts.length ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}
-                  >
-                      {selectedContactIds.length > 0 && selectedContactIds.length === contacts.length && <CheckSquare className="w-3 h-3 text-white" />}
-                  </button>
-              </th>
-              <th className="p-4">Name</th>
-              <th className="p-4">Phone</th>
-              <th className="p-4">Company</th>
-              <th className="p-4">Tags</th>
-              <th className="p-4">Last Interaction</th>
-              <th className="p-4 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredContacts.length > 0 ? (
-                filteredContacts.map((contact) => (
-                <tr key={contact.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => setEditingContact(contact)}>
-                    <td className="p-4" onClick={(e) => e.stopPropagation()}>
-                         <button 
-                            onClick={() => toggleSelectContact(contact.id)}
-                            className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedContactIds.includes(contact.id) ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'}`}
-                        >
-                            {selectedContactIds.includes(contact.id) && <CheckSquare className="w-3 h-3 text-white" />}
-                        </button>
-                    </td>
-                    <td className="p-4">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 text-xs font-bold overflow-hidden border border-slate-200">
-                            {contact.avatar ? (
-                                <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
-                            ) : (
-                                contact.name.charAt(0)
-                            )}
+                        <div className="space-y-2">
+                           <label className="text-sm font-medium text-slate-700">Target Audience</label>
+                           <div className="grid grid-cols-3 gap-3">
+                              <button onClick={() => setDraftCampaign({...draftCampaign, audienceType: 'all'})} className={`p-3 rounded border text-sm ${draftCampaign.audienceType === 'all' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold' : 'border-slate-200'}`}>All Contacts</button>
+                              <button onClick={() => setDraftCampaign({...draftCampaign, audienceType: 'tag'})} className={`p-3 rounded border text-sm ${draftCampaign.audienceType === 'tag' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold' : 'border-slate-200'}`}>Filter by Tags</button>
+                              <button onClick={() => setDraftCampaign({...draftCampaign, audienceType: 'manual'})} className={`p-3 rounded border text-sm ${draftCampaign.audienceType === 'manual' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold' : 'border-slate-200'}`}>
+                                 Manual Selection ({draftCampaign.targetContactIds?.length || 0})
+                              </button>
+                           </div>
                         </div>
-                        <span className="font-medium text-slate-800">{contact.name}</span>
-                    </div>
-                    </td>
-                    <td className="p-4 text-slate-600 font-mono text-sm">{contact.phone}</td>
-                    <td className="p-4 text-slate-600 text-sm">
-                        {contact.company ? (
-                            <span className="font-medium">{contact.company}</span>
-                        ) : (
-                            <span className="text-slate-400 italic">--</span>
+
+                        {draftCampaign.audienceType === 'tag' && (
+                           <div className="flex flex-wrap gap-2 p-4 bg-slate-50 rounded-lg">
+                              {allTags.map(tag => (
+                                 <button 
+                                   key={tag}
+                                   onClick={() => {
+                                      const current = draftCampaign.targetTags || [];
+                                      const newTags = current.includes(tag) ? current.filter(t => t !== tag) : [...current, tag];
+                                      setDraftCampaign({...draftCampaign, targetTags: newTags});
+                                   }}
+                                   className={`px-3 py-1 rounded-full text-sm border transition-colors ${draftCampaign.targetTags?.includes(tag) ? 'bg-emerald-100 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-600'}`}
+                                 >
+                                    {tag}
+                                 </button>
+                              ))}
+                           </div>
                         )}
-                    </td>
-                    <td className="p-4">
-                    <div className="flex gap-2 flex-wrap">
-                        {contact.tags.map((tag, i) => (
-                        <span key={i} className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs border border-slate-200">
-                            {tag}
-                        </span>
-                        ))}
-                    </div>
-                    </td>
-                    <td className="p-4 text-slate-500 text-sm">{contact.lastInteraction}</td>
-                    <td className="p-4 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button 
-                            onClick={() => deleteContact(contact.id)}
-                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                            title="Delete Contact"
-                        >
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </td>
-                </tr>
-                ))
-            ) : (
-                <tr>
-                    <td colSpan={7} className="p-8 text-center text-slate-400">
-                        No contacts found. Add some to get started.
-                    </td>
-                </tr>
-            )}
-          </tbody>
-        </table>
+
+                        <div className="flex justify-end pt-4">
+                           <button onClick={() => setCampaignStep(2)} disabled={!draftCampaign.name} className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-bold disabled:opacity-50">Next: Select Template</button>
+                        </div>
+                     </div>
+                  )}
+
+                  {campaignStep === 2 && (
+                     <div className="space-y-4">
+                        <div className="flex gap-4 border-b border-slate-100 mb-4">
+                           <button onClick={() => setWizardTab('select')} className={`pb-2 text-sm font-medium border-b-2 transition-colors ${wizardTab === 'select' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-slate-500'}`}>Select Existing</button>
+                           <button onClick={() => setWizardTab('generate')} className={`pb-2 text-sm font-medium border-b-2 transition-colors ${wizardTab === 'generate' ? 'border-purple-500 text-purple-700' : 'border-transparent text-slate-500'}`}>Generate with AI</button>
+                        </div>
+
+                        {wizardTab === 'select' && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto">
+                              {templates.map(t => (
+                                  <div key={t.id} onClick={() => setDraftCampaign({...draftCampaign, templateId: t.id})} className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${draftCampaign.templateId === t.id ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100'}`}>
+                                  <div className="font-bold text-slate-800 mb-1">{t.name}</div>
+                                  <p className="text-xs text-slate-500 line-clamp-3">{t.content}</p>
+                                  </div>
+                              ))}
+                          </div>
+                        )}
+
+                        {wizardTab === 'generate' && (
+                          <div className="bg-purple-50 p-6 rounded-xl border border-purple-100">
+                              <h4 className="font-bold text-purple-900 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4"/> Instant AI Creator</h4>
+                              <p className="text-sm text-purple-700 mb-4">Describe your message below. The AI will generate it and immediately preview it.</p>
+                              <textarea 
+                                  className="w-full p-3 border border-purple-200 rounded-lg text-sm h-24 mb-4 focus:ring-2 focus:ring-purple-500/20 outline-none" 
+                                  placeholder="e.g. Write a friendly reminder about our flash sale..."
+                                  value={wizardAiPrompt}
+                                  onChange={(e) => setWizardAiPrompt(e.target.value)}
+                              />
+                              <button onClick={handleWizardAiGenerate} disabled={!wizardAiPrompt || isWizardGenerating} className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold flex items-center gap-2">
+                                  {isWizardGenerating ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>}
+                                  Generate & Preview
+                              </button>
+                          </div>
+                        )}
+
+                        <div className="flex justify-between pt-4">
+                           <button onClick={() => setCampaignStep(1)} className="text-slate-500">Back</button>
+                           {wizardTab === 'select' && (
+                              <button onClick={() => setCampaignStep(3)} disabled={!draftCampaign.templateId} className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-bold">Next: Schedule</button>
+                           )}
+                        </div>
+                     </div>
+                  )}
+
+                  {campaignStep === 3 && (
+                     <div className="space-y-6">
+                        <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                           <h4 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
+                              <MessageSquare className="w-4 h-4 text-emerald-600"/> Message Preview
+                           </h4>
+                           {(() => {
+                              const selectedTemplate = templates.find(t => t.id === draftCampaign.templateId);
+                              let sample: Contact | undefined;
+                              if (draftCampaign.audienceType === 'manual' && draftCampaign.targetContactIds?.length) sample = contacts.find(c => c.id === draftCampaign.targetContactIds![0]);
+                              else if (draftCampaign.audienceType === 'tag') sample = contacts.find(c => c.tags.some(t => draftCampaign.targetTags?.includes(t)));
+                              else sample = contacts[0];
+
+                              return sample && selectedTemplate ? (
+                                <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100 max-w-sm">
+                                   {selectedTemplate.mediaUrl && (
+                                      <img src={selectedTemplate.mediaUrl} alt="Header" className="w-full h-32 object-cover rounded-md mb-2" />
+                                   )}
+                                   <p className="text-sm text-slate-800 whitespace-pre-wrap">
+                                      {fillTemplate(selectedTemplate.content, sample)}
+                                   </p>
+                                   {selectedTemplate.type === 'image' && selectedTemplate.mediaUrl && (
+                                        <p className="text-xs text-blue-500 mt-2 underline">
+                                            {selectedTemplate.mediaUrl.startsWith('data:') ? '[Image Attached]' : selectedTemplate.mediaUrl}
+                                        </p>
+                                   )}
+                                   {selectedTemplate.buttons?.map((b, i) => (
+                                      <div key={i} className="mt-2 text-blue-600 underline font-medium block">
+                                         {b.label}: {b.value}
+                                      </div>
+                                   ))}
+                                </div>
+                              ) : <p className="text-sm text-slate-400 italic">Select audience and template to view preview.</p>
+                           })()}
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                           <button onClick={launchCampaign} className="p-4 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all text-left group bg-emerald-600 text-white hover:text-emerald-900">
+                              <Play className="w-6 h-6 mb-2 group-hover:scale-110 transition-transform" />
+                              <div className="font-bold">Send Now</div>
+                              <div className="text-xs opacity-80">Auto-open WhatsApp</div>
+                           </button>
+                        </div>
+                        <div className="flex justify-start pt-4">
+                           <button onClick={() => setCampaignStep(2)} className="text-slate-500">Back</button>
+                        </div>
+                     </div>
+                  )}
+               </div>
+             </div>
+          )}
+        </main>
       </div>
-    </div>
-  );
-  };
 
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white font-serif font-bold text-xl shadow-lg shadow-emerald-500/20">
-             D
+      {/* Profile Modal */}
+      {isProfileModalOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200">
+             <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold">Profile Settings</h3>
+                <button onClick={() => setIsProfileModalOpen(false)}><X className="w-5 h-5 text-slate-400 hover:text-slate-600"/></button>
+             </div>
+             <div className="space-y-4">
+                <div className="flex justify-center mb-4">
+                   <img src={user.avatar} alt="Avatar" className="w-20 h-20 rounded-full bg-slate-200 border-4 border-slate-50"/>
+                </div>
+                <FormInput label="Name" value={user.name} onChange={e => setUser({...user, name: e.target.value})} />
+                <FormInput label="Company" value={user.company} onChange={e => setUser({...user, company: e.target.value})} />
+                <div className="grid grid-cols-2 gap-2">
+                    <FormInput label="Username" value={user.username} onChange={e => setUser({...user, username: e.target.value})} />
+                    <FormInput label="Password" type="password" value={user.password || ''} onChange={e => setUser({...user, password: e.target.value})} />
+                </div>
+                <FormInput label="Avatar URL" value={user.avatar} onChange={e => setUser({...user, avatar: e.target.value})} />
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">Sending Speed (Seconds Delay)</label>
+                  <input 
+                    type="range" 
+                    min="1" max="10" 
+                    value={user.settings.delaySeconds} 
+                    onChange={e => setUser({...user, settings: {...user.settings, delaySeconds: parseInt(e.target.value)}})}
+                    className="w-full accent-emerald-600"
+                  />
+                  <div className="flex justify-between text-xs text-slate-500 mt-1">
+                     <span>Fast (1s)</span>
+                     <span className="font-bold text-emerald-600">{user.settings.delaySeconds} seconds</span>
+                     <span>Slow (10s)</span>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-4">
+                  <button onClick={() => setIsProfileModalOpen(false)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold">Save Changes</button>
+                </div>
+             </div>
           </div>
-          <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-teal-500">DesiChai</h1>
         </div>
-        
-        {/* Nav Tabs - Centered */}
-        <div className="hidden md:flex bg-slate-100 p-1 rounded-lg">
-            {(['dashboard', 'campaigns', 'contacts'] as ViewState[]).map(view => (
-                <button
-                    key={view}
-                    onClick={() => setCurrentView(view)}
-                    className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all ${currentView === view ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                    {view.charAt(0).toUpperCase() + view.slice(1)}
-                </button>
-            ))}
-        </div>
-
-        <button onClick={() => setShowProfile(true)} className="flex items-center gap-3 hover:bg-slate-50 p-1.5 pr-3 rounded-full transition-colors border border-transparent hover:border-slate-100">
-          <div className="w-8 h-8 rounded-full bg-slate-200 overflow-hidden border border-slate-200">
-             <img src={userProfile.avatar} alt="User" className="w-full h-full object-cover" />
-          </div>
-          <span className="text-sm font-medium text-slate-700 hidden sm:block">{userProfile.name}</span>
-        </button>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6">
-        {currentView === 'dashboard' && renderDashboard()}
-        {currentView === 'campaigns' && renderCampaigns()}
-        {currentView === 'contacts' && renderContacts()}
-      </main>
-
-      {/* Floating Notification Toast */}
-      {notification && (
-          <div className={`fixed bottom-6 right-6 px-6 py-3 rounded-xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-300 z-[100] ${notification.type === 'success' ? 'bg-white border-emerald-100 text-slate-800' : 'bg-red-50 border-red-100 text-red-800'}`}>
-              {notification.type === 'success' ? <CheckCircle className="w-5 h-5 text-emerald-500" /> : <AlertTriangle className="w-5 h-5 text-red-500" />}
-              <span className="font-medium text-sm">{notification.message}</span>
-          </div>
       )}
-
-      {/* Modals */}
-      <ProfileModal 
-        isOpen={showProfile} 
-        onClose={() => setShowProfile(false)} 
-        user={userProfile}
-        onLogout={handleLogout}
-        onUpdateAvatar={handleProfileUpdate}
-        onExportData={handleExportData}
-        onImportData={handleImportData}
-        onUpdateUser={handleUpdateUser}
-      />
-      
-      <AddContactModal 
-        isOpen={showAddContact} 
-        onClose={() => setShowAddContact(false)} 
-        onAddSingle={handleSingleAdd}
-        onAddBulk={handleBulkAdd}
-      />
-      
-      <ContactDetailsModal 
-        isOpen={!!editingContact}
-        contact={editingContact}
-        onClose={() => setEditingContact(null)}
-        onSave={handleUpdateContact}
-      />
-
-      <ConfirmationModal 
-        isOpen={showConfirmation} 
-        onClose={() => setShowConfirmation(false)} 
-        onConfirm={confirmSend}
-        pendingContact={pendingContact}
-        generatedMessage={generatedMessage}
-        campaignImage={campaignImage}
-        personalizeMessage={personalizeMessage}
-      />
-
-      <BulkSendModal 
-         isOpen={isBulkSending}
-         queue={bulkQueue}
-         currentIndex={bulkCurrentIndex}
-         message={generatedMessage}
-         image={campaignImage}
-         onClose={() => setIsBulkSending(false)}
-         onSendNext={handleBulkSendNext}
-         onSkip={handleBulkSkip}
-         personalizeMessage={personalizeMessage}
-      />
-
-      <ScheduleModal 
-        isOpen={showScheduleModal}
-        onClose={() => setShowScheduleModal(false)}
-        onSchedule={handleScheduleCampaign}
-      />
     </div>
   );
 };
