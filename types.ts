@@ -30,7 +30,7 @@ export interface LogEntry {
   campaignId: string;
   contactName: string;
   contactPhone: string;
-  status: 'queued' | 'sending' | 'sent' | 'failed';
+  status: 'queued' | 'sending' | 'sent' | 'failed' | 'delivered' | 'read';
   message?: string;
 }
 
@@ -44,9 +44,16 @@ export interface Campaign {
   targetContactIds: string[]; // Used if audienceType is 'manual'
   scheduleDate?: string; // ISO String
   recurring?: 'none' | 'daily' | 'weekly';
+  customButtons?: {
+    type: 'url' | 'phone' | 'location';
+    label: string;
+    value: string;
+  }[];
   progress: {
     total: number;
     sent: number;
+    delivered: number;
+    read: number;
     failed: number;
   };
   createdAt: string;
